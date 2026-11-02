@@ -1,0 +1,318 @@
+using MiniPaint.Core.Document;
+using MiniPaint.Core.Imaging;
+
+namespace MiniPaint.Core.History;
+
+public sealed class LayerPixelsCommand : IEditCommand
+{
+    private readonly Layer _layer;
+    private readonly PixelBuffer _before;
+    private readonly PixelBuffer _after;
+    private readonly Action? _onChanged;
+
+    public string Name { get; }
+
+    public LayerPixelsCommand(string name, Layer layer, PixelBuffer before, PixelBuffer after, Action? onChanged = null)
+    {
+        Name = name;
+        _layer = layer;
+        _before = before;
+        _after = after;
+        _onChanged = onChanged;
+    }
+
+    public void Execute()
+    {
+        _layer.ReplacePixels(_after.Clone());
+        _onChanged?.Invoke();
+    }
+
+    public void Undo()
+    {
+        _layer.ReplacePixels(_before.Clone());
+        _onChanged?.Invoke();
+    }
+}
+
+public sealed class DeleteLayerCommand : IEditCommand
+{
+    private readonly PaintDocument _document;
+    private Guid _layerId;
+    private PixelBuffer? _pixels;
+    private string _name = "";
+    private bool _visible = true;
+    private float _opacity = 1f;
+    private int _ox, _oy, _index;
+    private readonly Action? _onChanged;
+
+    public string Name => "Delete Layer";
+
+    public DeleteLayerCommand(PaintDocument document, Guid layerId, Action? onChanged = null)
+    {
+        _document = document;
+        _layerId = layerId;
+        _onChanged = onChanged;
+    }
+
+    public void Execute()
+    {
+        var idx = -1;
+        Layer? layer = null;
+        for (int i = 0; i < _document.Layers.Count; i++)
+        {
+            if (_document.Layers[i].Id == _layerId)
+            {
+                idx = i;
+                layer = _document.Layers[i];
+                break;
+            }
+        }
+        if (layer is null || idx < 0) return;
+
+        _index = idx;
+        _name = layer.Name;
+        _visible = layer.IsVisible;
+        _opacity = layer.Opacity;
+        _ox = layer.OffsetX;
+        _oy = layer.OffsetY;
+        _pixels?.Dispose();
+        _pixels = layer.Pixels.Clone();
+        _document.RemoveLayer(_layerId);
+        _onChanged?.Invoke();
+    }
+
+    public void Undo()
+    {
+        if (_pixels is null) return;
+        var layer = new Layer(_name, _pixels.Clone(), _ox, _oy)
+        {
+            IsVisible = _visible,
+            Opacity = _opacity
+        };
+        _document.AddLayer(layer, _index);
+        _layerId = layer.Id;
+        _onChanged?.Invoke();
+    }
+}
+
+public sealed class ReorderLayerCommand : IEditCommand
+{
+    private readonly PaintDocument _document;
+    private readonly Guid _layerId;
+    private readonly int _from;
+    private readonly int _to;
+    private readonly Action? _onChanged;
+
+    public string Name => "Reorder Layer";
+
+    public ReorderLayerCommand(PaintDocument document, Guid layerId, int from, int to, Action? onChanged = null)
+    {
+        _document = document;
+        _layerId = layerId;
+        _from = from;
+        _to = to;
+        _onChanged = onChanged;
+    }
+
+    public void Execute()
+    {
+        _document.MoveLayer(_layerId, _to);
+        _onChanged?.Invoke();
+    }
+
+    public void Undo()
+    {
+        _document.MoveLayer(_layerId, _from);
+        _onChanged?.Invoke();
+    }
+}
+
+public sealed class LayerPropertyCommand : IEditCommand
+{
+    private readonly Layer _layer;
+    private readonly string _nameBefore;
+    private readonly string _nameAfter;
+    private readonly bool _visBefore;
+    private readonly bool _visAfter;
+    private readonly float _opBefore;
+    private readonly float _opAfter;
+    private readonly int _oxBefore, _oyBefore, _oxAfter, _oyAfter;
+    private readonly Action? _onChanged;
+
+    public string Name { get; }
+
+    public LayerPropertyCommand(
+        string commandName,
+        Layer layer,
+        string nameBefore, string nameAfter,
+        bool visBefore, bool visAfter,
+        float opBefore, float opAfter,
+        int oxBefore, int oyBefore, int oxAfter, int oyAfter,
+        Action? onChanged = null)
+    {
+        Name = commandName;
+        _layer = layer;
+        _nameBefore = nameBefore;
+        _nameAfter = nameAfter;
+        _visBefore = visBefore;
+        _visAfter = visAfter;
+        _opBefore = opBefore;
+        _opAfter = opAfter;
+        _oxBefore = oxBefore;
+        _oyBefore = oyBefore;
+        _oxAfter = oxAfter;
+        _oyAfter = oyAfter;
+        _onChanged = onChanged;
+    }
+
+    public static LayerPropertyCommand Rename(Layer layer, string newName, Action? onChanged = null) =>
+        new("Rename Layer", layer, layer.Name, newName, layer.IsVisible, layer.IsVisible,
+            layer.Opacity, layer.Opacity, layer.OffsetX, layer.OffsetY, layer.OffsetX, layer.OffsetY, onChanged);
+
+    public static LayerPropertyCommand Visibility(Layer layer, bool visible, Action? onChanged = null) =>
+        new("Layer Visibility", layer, layer.Name, layer.Name, layer.IsVisible, visible,
+            layer.Opacity, layer.Opacity, layer.OffsetX, layer.OffsetY, layer.OffsetX, layer.OffsetY, onChanged);
+
+    public static LayerPropertyCommand Opacity(Layer layer, float opacity, Action? onChanged = null) =>
+        new("Layer Opacity", layer, layer.Name, layer.Name, layer.IsVisible, layer.IsVisible,
+            layer.Opacity, opacity, layer.OffsetX, layer.OffsetY, layer.OffsetX, layer.OffsetY, onChanged);
+
+    public static LayerPropertyCommand Move(Layer layer, int x, int y, Action? onChanged = null) =>
+        new("Move Layer", layer, layer.Name, layer.Name, layer.IsVisible, layer.IsVisible,
+            layer.Opacity, layer.Opacity, layer.OffsetX, layer.OffsetY, x, y, onChanged);
+
+    public void Execute() => Apply(_nameAfter, _visAfter, _opAfter, _oxAfter, _oyAfter);
+    public void Undo() => Apply(_nameBefore, _visBefore, _opBefore, _oxBefore, _oyBefore);
+
+    private void Apply(string name, bool vis, float op, int ox, int oy)
+    {
+        _layer.Name = name;
+        _layer.IsVisible = vis;
+        _layer.Opacity = op;
+        _layer.OffsetX = ox;
+        _layer.OffsetY = oy;
+        _onChanged?.Invoke();
+    }
+}
+
+/// <summary>
+/// Paste creates a brand-new layer each Execute from stored pixel snapshot (safe across undo/redo dispose).
+/// </summary>
+public sealed class PasteLayerCommand : IEditCommand
+{
+    private readonly PaintDocument _document;
+    private readonly string _layerName;
+    private readonly PixelBuffer _pixels;
+    private readonly int _ox;
+    private readonly int _oy;
+    private Guid? _currentLayerId;
+    private readonly Action? _onChanged;
+
+    public string Name => "Paste Layer";
+
+    public PasteLayerCommand(PaintDocument document, Layer layerTemplate, Action? onChanged = null)
+    {
+        _document = document;
+        _layerName = layerTemplate.Name;
+        _pixels = layerTemplate.Pixels.Clone();
+        _ox = layerTemplate.OffsetX;
+        _oy = layerTemplate.OffsetY;
+        _onChanged = onChanged;
+        // First execute will add; if template was already added by caller, pass via Record after add.
+        _currentLayerId = layerTemplate.Id;
+    }
+
+    /// <summary>Use when layer is not yet in the document.</summary>
+    public static PasteLayerCommand CreatePending(PaintDocument document, string name, PixelBuffer pixels, int x, int y, Action? onChanged = null)
+    {
+        var temp = new Layer(name, pixels, x, y);
+        var cmd = new PasteLayerCommand(document, temp, onChanged);
+        cmd._currentLayerId = null;
+        temp.Dispose();
+        return cmd;
+    }
+
+    public Layer? LastLayer { get; private set; }
+
+    public void Execute()
+    {
+        if (_currentLayerId is Guid existing)
+        {
+            // Already present from Record path — ensure reference.
+            try
+            {
+                LastLayer = _document.RequireLayer(existing);
+                _onChanged?.Invoke();
+                return;
+            }
+            catch (ArgumentException)
+            {
+                _currentLayerId = null;
+            }
+        }
+
+        var layer = new Layer(_layerName, _pixels.Clone(), _ox, _oy);
+        _document.AddLayer(layer);
+        _currentLayerId = layer.Id;
+        LastLayer = layer;
+        _onChanged?.Invoke();
+    }
+
+    public void Undo()
+    {
+        if (_currentLayerId is Guid id)
+        {
+            try { _document.RemoveLayer(id); } catch { /* already gone */ }
+            _currentLayerId = null;
+            LastLayer = null;
+            _onChanged?.Invoke();
+        }
+    }
+}
+
+public sealed class AddEmptyLayerCommand : IEditCommand
+{
+    private readonly PaintDocument _document;
+    private readonly string _name;
+    private Guid? _layerId;
+    private readonly Action? _onChanged;
+
+    public string Name => "Add Layer";
+    public Layer? LastLayer { get; private set; }
+
+    public AddEmptyLayerCommand(PaintDocument document, string name, Action? onChanged = null)
+    {
+        _document = document;
+        _name = name;
+        _onChanged = onChanged;
+    }
+
+    public void Execute()
+    {
+        if (_layerId is Guid id)
+        {
+            try
+            {
+                LastLayer = _document.RequireLayer(id);
+                return;
+            }
+            catch (ArgumentException) { _layerId = null; }
+        }
+
+        var layer = _document.AddEmptyLayer(_name);
+        _layerId = layer.Id;
+        LastLayer = layer;
+        _onChanged?.Invoke();
+    }
+
+    public void Undo()
+    {
+        if (_layerId is Guid id)
+        {
+            try { _document.RemoveLayer(id); } catch { }
+            _layerId = null;
+            LastLayer = null;
+            _onChanged?.Invoke();
+        }
+    }
+}

@@ -1,0 +1,24 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="MiniPaint.App.App"
+             xmlns:local="using:MiniPaint.App"
+             RequestedThemeVariant="Dark">
+
+  <Application.DataTemplates>
+    <local:ViewLocator />
+  </Application.DataTemplates>
+
+  <Application.Styles>
+    <FluentTheme />
+    <Style Selector="MenuItem">
+      <Setter Property="Foreground" Value="#DDDDDD" />
+    </Style>
+    <Style Selector="Button">
+      <Setter Property="Background" Value="#3F3F46" />
+      <Setter Property="Foreground" Value="#EEEEEE" />
+    </Style>
+    <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+      <Setter Property="Background" Value="#0E639C" />
+    </Style>
+  </Application.Styles>
+</Application>

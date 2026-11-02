@@ -1,0 +1,153 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:MiniPaint.App.ViewModels"
+        xmlns:ctrl="using:MiniPaint.App.Controls"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="1280" d:DesignHeight="800"
+        x:Class="MiniPaint.App.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Icon="/Assets/avalonia-logo.ico"
+        Title="MiniPaint"
+        Width="1280" Height="800"
+        Background="#1E1E1E"
+        Foreground="#DDDDDD"
+        KeyDown="OnWindowKeyDown">
+
+  <Design.DataContext>
+    <vm:MainViewModel />
+  </Design.DataContext>
+
+  <DockPanel>
+    <!-- Menu -->
+    <Menu DockPanel.Dock="Top" Background="#2D2D30" Foreground="#DDD">
+      <MenuItem Header="_File">
+        <MenuItem Header="_New" Command="{Binding NewDocumentCommand}" InputGesture="Ctrl+N" />
+        <MenuItem Header="_Open..." Command="{Binding OpenCommand}" InputGesture="Ctrl+O" />
+        <Separator />
+        <MenuItem Header="_Save Project..." Command="{Binding SaveProjectCommand}" InputGesture="Ctrl+S" />
+        <MenuItem Header="_Export PNG..." Command="{Binding ExportPngCommand}" InputGesture="Ctrl+Shift+E" />
+        <Separator />
+        <MenuItem Header="_Close" Command="{Binding CloseDocumentCommand}" InputGesture="Ctrl+W" />
+      </MenuItem>
+      <MenuItem Header="_Edit">
+        <MenuItem Header="_Undo" Command="{Binding UndoCommand}" InputGesture="Ctrl+Z" />
+        <MenuItem Header="_Redo" Command="{Binding RedoCommand}" InputGesture="Ctrl+Y" />
+        <Separator />
+        <MenuItem Header="Cu_t" Command="{Binding CutCommand}" InputGesture="Ctrl+X" />
+        <MenuItem Header="_Copy" Command="{Binding CopyCommand}" InputGesture="Ctrl+C" />
+        <MenuItem Header="_Paste" Command="{Binding PasteCommand}" InputGesture="Ctrl+V" />
+        <Separator />
+        <MenuItem Header="Select _All" Command="{Binding SelectAllCommand}" InputGesture="Ctrl+A" />
+        <MenuItem Header="_Deselect" Command="{Binding DeselectCommand}" InputGesture="Ctrl+D" />
+      </MenuItem>
+      <MenuItem Header="_View">
+        <MenuItem Header="_Fit to Window" Command="{Binding FitToWindowCommand}" InputGesture="Ctrl+0" />
+        <MenuItem Header="_Actual Pixels (100%)" Command="{Binding Zoom100Command}" InputGesture="Ctrl+1" />
+      </MenuItem>
+      <MenuItem Header="_Layer">
+        <MenuItem Header="_Add" Command="{Binding AddLayerCommand}" />
+        <MenuItem Header="_Duplicate" Command="{Binding DuplicateLayerCommand}" />
+        <MenuItem Header="_Delete" Command="{Binding DeleteLayerCommand}" />
+        <Separator />
+        <MenuItem Header="Move _Up" Command="{Binding MoveLayerUpCommand}" />
+        <MenuItem Header="Move Do_wn" Command="{Binding MoveLayerDownCommand}" />
+      </MenuItem>
+    </Menu>
+
+    <!-- Status bar -->
+    <Border DockPanel.Dock="Bottom" Background="#007ACC" Padding="8,4">
+      <Grid ColumnDefinitions="*,Auto,Auto,Auto">
+        <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" />
+        <TextBlock Grid.Column="1" Text="{Binding SizeText}" Margin="16,0" VerticalAlignment="Center" />
+        <TextBlock Grid.Column="2" Text="{Binding CursorText}" Margin="16,0" VerticalAlignment="Center" />
+        <TextBlock Grid.Column="3" Text="{Binding ZoomText}" Margin="16,0,0,0" VerticalAlignment="Center" />
+      </Grid>
+    </Border>
+
+    <!-- Document tabs -->
+    <TabControl DockPanel.Dock="Top" ItemsSource="{Binding Tabs}" SelectedItem="{Binding SelectedTab}"
+                Background="#252526" MinHeight="32">
+      <TabControl.ItemTemplate>
+        <DataTemplate x:DataType="vm:DocumentTabViewModel">
+          <TextBlock Text="{Binding Title}" Margin="4,0" />
+        </DataTemplate>
+      </TabControl.ItemTemplate>
+      <TabControl.ContentTemplate>
+        <DataTemplate>
+          <Panel />
+        </DataTemplate>
+      </TabControl.ContentTemplate>
+    </TabControl>
+
+    <!-- Main body -->
+    <Grid ColumnDefinitions="48,*,260">
+      <!-- Toolbox -->
+      <Border Grid.Column="0" Background="#333337" BorderBrush="#3F3F46" BorderThickness="0,0,1,0">
+        <StackPanel Margin="4" Spacing="4">
+          <Button ToolTip.Tip="Rectangular Selection (V)"
+                  Command="{Binding SetToolSelectCommand}"
+                  HorizontalAlignment="Stretch" Height="40" Content="Sel" FontSize="12" />
+          <Button ToolTip.Tip="Move Layer (M)"
+                  Command="{Binding SetToolMoveCommand}"
+                  HorizontalAlignment="Stretch" Height="40" Content="Move" FontSize="12" />
+          <Button ToolTip.Tip="Pan (H / Space+drag)"
+                  Command="{Binding SetToolPanCommand}"
+                  HorizontalAlignment="Stretch" Height="40" Content="Pan" FontSize="12" />
+          <Separator Margin="0,8" />
+          <Button ToolTip.Tip="Fit" Command="{Binding FitToWindowCommand}"
+                  HorizontalAlignment="Stretch" Height="32" Content="Fit" FontSize="11" />
+          <Button ToolTip.Tip="100%" Command="{Binding Zoom100Command}"
+                  HorizontalAlignment="Stretch" Height="32" Content="100%" FontSize="11" />
+        </StackPanel>
+      </Border>
+
+      <!-- Canvas -->
+      <Border Grid.Column="1" Background="#1E1E1E">
+        <ctrl:ImageCanvas x:Name="Canvas"
+                          Workspace="{Binding ActiveWorkspace}"
+                          Tool="{Binding CurrentTool}" />
+      </Border>
+
+      <!-- Layers panel -->
+      <Border Grid.Column="2" Background="#252526" BorderBrush="#3F3F46" BorderThickness="1,0,0,0">
+        <DockPanel>
+          <TextBlock DockPanel.Dock="Top" Text="Layers" FontWeight="SemiBold"
+                     Margin="10,8,10,4" Foreground="#CCC" />
+          <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8,0,8,8" Spacing="4">
+            <Button Content="+" ToolTip.Tip="Add" Command="{Binding AddLayerCommand}" Width="28" />
+            <Button Content="⧉" ToolTip.Tip="Duplicate" Command="{Binding DuplicateLayerCommand}" Width="28" />
+            <Button Content="✕" ToolTip.Tip="Delete" Command="{Binding DeleteLayerCommand}" Width="28" />
+            <Button Content="↑" ToolTip.Tip="Up" Command="{Binding MoveLayerUpCommand}" Width="28" />
+            <Button Content="↓" ToolTip.Tip="Down" Command="{Binding MoveLayerDownCommand}" Width="28" />
+          </StackPanel>
+
+          <StackPanel DockPanel.Dock="Bottom" Margin="8" Spacing="4">
+            <TextBlock Text="Opacity" FontSize="11" Foreground="#AAA" />
+            <Slider Minimum="0" Maximum="1" TickFrequency="0.01" IsSnapToTickEnabled="False"
+                    Value="{Binding SelectedLayer.Opacity, Mode=TwoWay}"
+                    PointerReleased="OnOpacityPointerReleased" />
+            <TextBox PlaceholderText="Rename layer..." x:Name="RenameBox"
+                     KeyDown="OnRenameKeyDown" />
+          </StackPanel>
+
+          <ListBox ItemsSource="{Binding Layers}" SelectedItem="{Binding SelectedLayer}"
+                   Background="Transparent" Margin="4">
+            <ListBox.ItemTemplate>
+              <DataTemplate x:DataType="vm:LayerItemViewModel">
+                <Grid ColumnDefinitions="Auto,*,Auto" Margin="2">
+                  <CheckBox IsChecked="{Binding IsVisible}"
+                            Click="OnVisibilityClick"
+                            Tag="{Binding}" />
+                  <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" Margin="6,0" />
+                  <TextBlock Grid.Column="2" Text="{Binding Opacity, StringFormat={}{0:P0}}"
+                             Foreground="#888" FontSize="11" VerticalAlignment="Center" />
+                </Grid>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </DockPanel>
+      </Border>
+    </Grid>
+  </DockPanel>
+</Window>

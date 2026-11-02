@@ -1,0 +1,10 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.log
+build-*.log
+test-*.log
+tools/GenSample/bin/
+tools/GenSample/obj/

@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MiniPaint.App/MiniPaint.App.csproj" />
+    <Project Path="src/MiniPaint.Core/MiniPaint.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MiniPaint.Core.Tests/MiniPaint.Core.Tests.csproj" />
+  </Folder>
+</Solution>
