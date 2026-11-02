@@ -8,3 +8,7 @@ build-*.log
 test-*.log
 tools/GenSample/bin/
 tools/GenSample/obj/
+
+crash-*.txt
+tf-*.txt
+*.log
