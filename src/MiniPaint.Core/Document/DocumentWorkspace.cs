@@ -4,6 +4,7 @@ using MiniPaint.Core.History;
 using MiniPaint.Core.Imaging;
 using MiniPaint.Core.Project;
 using MiniPaint.Core.Selection;
+using MiniPaint.Core.Transform;
 
 namespace MiniPaint.Core.Document;
 
@@ -19,6 +20,8 @@ public sealed class DocumentWorkspace : IDisposable
     public PaintDocument Document { get; }
     public SelectionState Selection { get; } = new();
     public HistoryStack History { get; } = new();
+    public FreeTransformSession? ActiveTransform { get; private set; }
+    public bool IsTransforming => ActiveTransform is not null;
 
     public double Zoom { get; private set; } = 1.0;
     public double PanX { get; set; }
@@ -171,9 +174,71 @@ public sealed class DocumentWorkspace : IDisposable
         MarkSaved();
     }
 
+    public bool BeginTransform()
+    {
+        if (ActiveTransform is not null) return true;
+        var layer = Document.ActiveLayer;
+        if (layer is null) return false;
+        ActiveTransform = new FreeTransformSession(layer);
+        Selection.Clear();
+        Changed?.Invoke();
+        return true;
+    }
+
+    /// <summary>Rebake layer pixels from the frozen original using current transform params.</summary>
+    public void RefreshTransformPreview()
+    {
+        if (ActiveTransform is null) return;
+        var (pixels, ox, oy) = ActiveTransform.Bake();
+        ActiveTransform.Layer.ReplacePixels(pixels);
+        ActiveTransform.Layer.OffsetX = ox;
+        ActiveTransform.Layer.OffsetY = oy;
+        InvalidateComposite();
+        Changed?.Invoke();
+    }
+
+    public void CancelTransform()
+    {
+        if (ActiveTransform is null) return;
+        var session = ActiveTransform;
+        session.Layer.ReplacePixels(session.OriginalPixels.Clone());
+        session.Layer.OffsetX = session.OriginalOffsetX;
+        session.Layer.OffsetY = session.OriginalOffsetY;
+        ActiveTransform = null;
+        session.Dispose();
+        InvalidateComposite();
+        Changed?.Invoke();
+    }
+
+    public void CommitTransform()
+    {
+        if (ActiveTransform is null) return;
+        RefreshTransformPreview();
+        var session = ActiveTransform;
+        var layer = session.Layer;
+        var before = session.OriginalPixels.Clone();
+        int beforeOx = session.OriginalOffsetX;
+        int beforeOy = session.OriginalOffsetY;
+        var after = layer.Pixels.Clone();
+        int afterOx = layer.OffsetX;
+        int afterOy = layer.OffsetY;
+
+        ActiveTransform = null;
+        session.Dispose();
+
+        History.Record(new TransformLayerCommand(
+            layer, before, beforeOx, beforeOy, after, afterOx, afterOy, NotifyChanged));
+        Document.IsDirty = true;
+        Changed?.Invoke();
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
+        if (ActiveTransform is not null)
+        {
+            CancelTransform();
+        }
         _compositeCache?.Dispose();
         Document.Dispose();
         _disposed = true;

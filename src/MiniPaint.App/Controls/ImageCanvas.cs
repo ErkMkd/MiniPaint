@@ -6,7 +6,7 @@ using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using MiniPaint.Core.Document;
 using MiniPaint.Core.History;
-using MiniPaint.Core.Imaging;
+using MiniPaint.Core.Transform;
 
 namespace MiniPaint.App.Controls;
 
@@ -14,11 +14,12 @@ public enum CanvasTool
 {
     Pan,
     RectSelect,
-    MoveLayer
+    MoveLayer,
+    FreeTransform
 }
 
 /// <summary>
-/// Center viewport: checkerboard, composed image, zoom/pan, selection ants, tool hit-testing.
+/// Center viewport: checkerboard, composed image, zoom/pan, selection ants, free-transform handles.
 /// </summary>
 public sealed class ImageCanvas : Control
 {
@@ -42,6 +43,11 @@ public sealed class ImageCanvas : Control
     private DispatcherTimer? _antsTimer;
     private double _antsPhase;
 
+    private ScaleInteraction? _scaleIx;
+    private RotateInteraction? _rotateIx;
+    private MoveInteraction? _moveIx;
+    private TransformHandle _activeHandle = TransformHandle.None;
+
     public DocumentWorkspace? Workspace
     {
         get => GetValue(WorkspaceProperty);
@@ -55,6 +61,7 @@ public sealed class ImageCanvas : Control
     }
 
     public event Action? StatusChanged;
+    public event Action? TransformModeChanged;
 
     public int CursorDocX { get; private set; }
     public int CursorDocY { get; private set; }
@@ -72,7 +79,7 @@ public sealed class ImageCanvas : Control
         _antsTimer.Tick += (_, _) =>
         {
             _antsPhase = (_antsPhase + 1) % 16;
-            if (Workspace?.Selection.HasSelection == true)
+            if (Workspace?.Selection.HasSelection == true || Workspace?.IsTransforming == true)
                 InvalidateVisual();
         };
         _antsTimer.Start();
@@ -100,6 +107,7 @@ public sealed class ImageCanvas : Control
         _cacheVersion++;
         InvalidateVisual();
         StatusChanged?.Invoke();
+        TransformModeChanged?.Invoke();
     }
 
     public void InvalidateComposite()
@@ -110,6 +118,25 @@ public sealed class ImageCanvas : Control
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
+        var ws = Workspace;
+        if (ws?.IsTransforming == true)
+        {
+            if (e.Key == Key.Enter)
+            {
+                ws.CommitTransform();
+                TransformModeChanged?.Invoke();
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.Escape)
+            {
+                ws.CancelTransform();
+                TransformModeChanged?.Invoke();
+                e.Handled = true;
+                return;
+            }
+        }
+
         if (e.Key == Key.Space)
         {
             _spaceDown = true;
@@ -164,6 +191,25 @@ public sealed class ImageCanvas : Control
 
         if (!left) return;
 
+        if (ws.IsTransforming && ws.ActiveTransform is { } session)
+        {
+            BeginTransformInteraction(ws, session, p, e.KeyModifiers);
+            e.Pointer.Capture(this);
+            e.Handled = true;
+            return;
+        }
+
+        if (Tool == CanvasTool.FreeTransform)
+        {
+            if (ws.BeginTransform())
+            {
+                TransformModeChanged?.Invoke();
+                InvalidateVisual();
+            }
+            e.Handled = true;
+            return;
+        }
+
         if (Tool == CanvasTool.RectSelect)
         {
             _selecting = true;
@@ -186,6 +232,75 @@ public sealed class ImageCanvas : Control
         }
     }
 
+    private void BeginTransformInteraction(
+        DocumentWorkspace ws, FreeTransformSession session, Point p, KeyModifiers mods)
+    {
+        var (docX, docY) = ws.ScreenToDocument(p.X, p.Y);
+        // Continuous doc coords for smoother transform
+        double cdx = (p.X - ws.PanX) / ws.Zoom;
+        double cdy = (p.Y - ws.PanY) / ws.Zoom;
+
+        double handleRadiusDoc = 6.0 / ws.Zoom;
+        var hit = session.HitTest(cdx, cdy, handleRadiusDoc);
+        bool alt = mods.HasFlag(KeyModifiers.Alt);
+
+        if (hit is not TransformHandle.None and not TransformHandle.Move)
+        {
+            _activeHandle = hit;
+            _scaleIx = session.BeginScale(hit, cdx, cdy, fromCenter: alt);
+            _rotateIx = null;
+            _moveIx = null;
+            return;
+        }
+
+        if (session.HitTestRotate(cdx, cdy, handleRadiusDoc, handleRadiusDoc * 4))
+        {
+            _activeHandle = TransformHandle.Rotate;
+            _rotateIx = session.BeginRotate(cdx, cdy);
+            _scaleIx = null;
+            _moveIx = null;
+            return;
+        }
+
+        // Also allow rotate when near corners outside the box (screen-space)
+        if (NearCornerOutside(session, ws, p, out _))
+        {
+            _activeHandle = TransformHandle.Rotate;
+            _rotateIx = session.BeginRotate(cdx, cdy);
+            _scaleIx = null;
+            _moveIx = null;
+            return;
+        }
+
+        if (hit == TransformHandle.Move || FreeTransformSession.PointInQuad(cdx, cdy, session.GetCorners()))
+        {
+            _activeHandle = TransformHandle.Move;
+            _moveIx = session.BeginMove(cdx, cdy);
+            _scaleIx = null;
+            _rotateIx = null;
+        }
+    }
+
+    private bool NearCornerOutside(FreeTransformSession session, DocumentWorkspace ws, Point screen, out TransformHandle corner)
+    {
+        corner = TransformHandle.None;
+        TransformHandle[] corners =
+            [TransformHandle.NW, TransformHandle.NE, TransformHandle.SE, TransformHandle.SW];
+        foreach (var h in corners)
+        {
+            var (dx, dy) = session.GetHandleDocPoint(h);
+            double sx = dx * ws.Zoom + ws.PanX;
+            double sy = dy * ws.Zoom + ws.PanY;
+            double dist = Math.Sqrt((screen.X - sx) * (screen.X - sx) + (screen.Y - sy) * (screen.Y - sy));
+            if (dist > 8 && dist < 28)
+            {
+                corner = h;
+                return true;
+            }
+        }
+        return false;
+    }
+
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         var ws = Workspace;
@@ -200,10 +315,35 @@ public sealed class ImageCanvas : Control
             ws.PanX += delta.X;
             ws.PanY += delta.Y;
             _lastPointer = p;
-            ws.InvalidateComposite();
-            // Pan doesn't dirty document — fire view change only
             InvalidateVisual();
             StatusChanged?.Invoke();
+            e.Handled = true;
+            return;
+        }
+
+        if (ws.IsTransforming && ws.ActiveTransform is not null &&
+            (_scaleIx is not null || _rotateIx is not null || _moveIx is not null))
+        {
+            double cdx = (p.X - ws.PanX) / ws.Zoom;
+            double cdy = (p.Y - ws.PanY) / ws.Zoom;
+            bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+            bool alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+
+            if (_scaleIx is not null)
+            {
+                // Re-create with alt if needed mid-drag is awkward; alt is sampled at press.
+                _scaleIx.Update(cdx, cdy, constrainProportions: shift);
+            }
+            else if (_rotateIx is not null)
+            {
+                _rotateIx.Update(cdx, cdy, snap15: shift);
+            }
+            else if (_moveIx is not null)
+            {
+                _moveIx.Update(cdx, cdy, constrainAxis: shift);
+            }
+
+            ws.RefreshTransformPreview();
             e.Handled = true;
             return;
         }
@@ -228,6 +368,29 @@ public sealed class ImageCanvas : Control
             StatusChanged?.Invoke();
             e.Handled = true;
         }
+
+        // Cursor feedback while hovering transform handles
+        if (ws.IsTransforming && ws.ActiveTransform is { } session)
+        {
+            UpdateTransformCursor(session, ws, p);
+        }
+    }
+
+    private void UpdateTransformCursor(FreeTransformSession session, DocumentWorkspace ws, Point p)
+    {
+        double cdx = (p.X - ws.PanX) / ws.Zoom;
+        double cdy = (p.Y - ws.PanY) / ws.Zoom;
+        double handleRadiusDoc = 6.0 / ws.Zoom;
+        var hit = session.HitTest(cdx, cdy, handleRadiusDoc);
+        if (hit is not TransformHandle.None and not TransformHandle.Move)
+            Cursor = new Cursor(StandardCursorType.SizeAll);
+        else if (session.HitTestRotate(cdx, cdy, handleRadiusDoc, handleRadiusDoc * 4) ||
+                 NearCornerOutside(session, ws, p, out _))
+            Cursor = new Cursor(StandardCursorType.TopRightCorner);
+        else if (hit == TransformHandle.Move)
+            Cursor = new Cursor(StandardCursorType.SizeAll);
+        else
+            Cursor = Cursor.Default;
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
@@ -244,7 +407,6 @@ public sealed class ImageCanvas : Control
         {
             int endX = layer.OffsetX;
             int endY = layer.OffsetY;
-            // Restore start then apply via history command
             layer.OffsetX = _layerStartOx;
             layer.OffsetY = _layerStartOy;
             if (endX != _layerStartOx || endY != _layerStartOy)
@@ -256,6 +418,10 @@ public sealed class ImageCanvas : Control
         _panning = false;
         _selecting = false;
         _movingLayer = false;
+        _scaleIx = null;
+        _rotateIx = null;
+        _moveIx = null;
+        _activeHandle = TransformHandle.None;
         e.Pointer.Capture(null);
         base.OnPointerReleased(e);
     }
@@ -281,7 +447,6 @@ public sealed class ImageCanvas : Control
         DrawCheckerboard(context, ws);
 
         var dest = new Rect(ws.PanX, ws.PanY, ws.Document.Width * ws.Zoom, ws.Document.Height * ws.Zoom);
-        // Nearest-neighbor at high zoom; must use PushRenderOptions (not Set* on Visual) inside Render.
         var renderOpts = new RenderOptions
         {
             BitmapInterpolationMode = ws.Zoom >= 4.0
@@ -293,7 +458,9 @@ public sealed class ImageCanvas : Control
             context.DrawImage(_bitmap, new Rect(0, 0, _bitmap.PixelSize.Width, _bitmap.PixelSize.Height), dest);
         }
 
-        if (ws.Selection.HasSelection)
+        if (ws.IsTransforming && ws.ActiveTransform is { } session)
+            DrawTransformOverlay(context, ws, session);
+        else if (ws.Selection.HasSelection)
             DrawMarchingAnts(context, ws);
     }
 
@@ -332,7 +499,6 @@ public sealed class ImageCanvas : Control
         var dark = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x3A));
         context.FillRectangle(dark, dest);
 
-        // Draw only visible checker cells at screen scale (cell*zoom)
         double screenCell = Math.Max(2, cell * z);
         int cols = (int)Math.Ceiling(dest.Width / screenCell);
         int rows = (int)Math.Ceiling(dest.Height / screenCell);
@@ -352,6 +518,53 @@ public sealed class ImageCanvas : Control
         }
     }
 
+    private void DrawTransformOverlay(DrawingContext context, DocumentWorkspace ws, FreeTransformSession session)
+    {
+        var corners = session.GetCorners();
+        var pts = corners.Select(c => new Point(c.x * ws.Zoom + ws.PanX, c.y * ws.Zoom + ws.PanY)).ToArray();
+
+        var geo = new StreamGeometry();
+        using (var g = geo.Open())
+        {
+            g.BeginFigure(pts[0], false);
+            g.LineTo(pts[1]);
+            g.LineTo(pts[2]);
+            g.LineTo(pts[3]);
+            g.EndFigure(true);
+        }
+
+        context.DrawGeometry(null, new Pen(Brushes.Black, 1), geo);
+        context.DrawGeometry(null, new Pen(Brushes.White, 1)
+        {
+            DashStyle = new DashStyle(new double[] { 4, 4 }, _antsPhase)
+        }, geo);
+
+        TransformHandle[] handles =
+        [
+            TransformHandle.NW, TransformHandle.N, TransformHandle.NE,
+            TransformHandle.E, TransformHandle.SE, TransformHandle.S,
+            TransformHandle.SW, TransformHandle.W
+        ];
+
+        foreach (var h in handles)
+        {
+            var (dx, dy) = session.GetHandleDocPoint(h);
+            double sx = dx * ws.Zoom + ws.PanX;
+            double sy = dy * ws.Zoom + ws.PanY;
+            var rect = new Rect(sx - 4, sy - 4, 8, 8);
+            context.FillRectangle(Brushes.White, rect);
+            context.DrawRectangle(null, new Pen(Brushes.Black, 1), rect);
+        }
+
+        // Pivot marker
+        var (cx, cy) = session.GetHandleDocPoint(TransformHandle.Move);
+        double px = cx * ws.Zoom + ws.PanX;
+        double py = cy * ws.Zoom + ws.PanY;
+        context.DrawLine(new Pen(Brushes.White, 1), new Point(px - 5, py), new Point(px + 5, py));
+        context.DrawLine(new Pen(Brushes.White, 1), new Point(px, py - 5), new Point(px, py + 5));
+        context.DrawLine(new Pen(Brushes.Black, 1), new Point(px - 5, py + 1), new Point(px + 5, py + 1));
+    }
+
     private void DrawMarchingAnts(DrawingContext context, DocumentWorkspace ws)
     {
         var sel = ws.Selection;
@@ -361,16 +574,11 @@ public sealed class ImageCanvas : Control
         double h = sel.Height * ws.Zoom;
         var rect = new Rect(x, y, w, h);
 
-        var black = new Pen(Brushes.Black, 1);
-        var white = new Pen(Brushes.White, 1);
-        // Static dual stroke + dashed overlay for "ants"
-        context.DrawRectangle(null, black, rect);
-        var dash = new Pen(Brushes.White, 1)
+        context.DrawRectangle(null, new Pen(Brushes.Black, 1), rect);
+        context.DrawRectangle(null, new Pen(Brushes.White, 1)
         {
             DashStyle = new DashStyle(new double[] { 4, 4 }, _antsPhase)
-        };
-        context.DrawRectangle(null, dash, rect);
-        _ = white;
+        }, rect);
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)

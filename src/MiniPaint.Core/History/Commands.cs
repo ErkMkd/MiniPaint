@@ -270,6 +270,49 @@ public sealed class PasteLayerCommand : IEditCommand
     }
 }
 
+public sealed class TransformLayerCommand : IEditCommand
+{
+    private readonly Layer _layer;
+    private readonly PixelBuffer _before;
+    private readonly PixelBuffer _after;
+    private readonly int _beforeOx, _beforeOy, _afterOx, _afterOy;
+    private readonly Action? _onChanged;
+
+    public string Name => "Free Transform";
+
+    public TransformLayerCommand(
+        Layer layer,
+        PixelBuffer before, int beforeOx, int beforeOy,
+        PixelBuffer after, int afterOx, int afterOy,
+        Action? onChanged = null)
+    {
+        _layer = layer;
+        _before = before;
+        _after = after;
+        _beforeOx = beforeOx;
+        _beforeOy = beforeOy;
+        _afterOx = afterOx;
+        _afterOy = afterOy;
+        _onChanged = onChanged;
+    }
+
+    public void Execute()
+    {
+        _layer.ReplacePixels(_after.Clone());
+        _layer.OffsetX = _afterOx;
+        _layer.OffsetY = _afterOy;
+        _onChanged?.Invoke();
+    }
+
+    public void Undo()
+    {
+        _layer.ReplacePixels(_before.Clone());
+        _layer.OffsetX = _beforeOx;
+        _layer.OffsetY = _beforeOy;
+        _onChanged?.Invoke();
+    }
+}
+
 public sealed class AddEmptyLayerCommand : IEditCommand
 {
     private readonly PaintDocument _document;

@@ -40,6 +40,10 @@
         <Separator />
         <MenuItem Header="Select _All" Command="{Binding SelectAllCommand}" InputGesture="Ctrl+A" />
         <MenuItem Header="_Deselect" Command="{Binding DeselectCommand}" InputGesture="Ctrl+D" />
+        <Separator />
+        <MenuItem Header="_Free Transform" Command="{Binding ToggleFreeTransformCommand}" InputGesture="Ctrl+T" />
+        <MenuItem Header="_Apply Transform" Command="{Binding CommitTransformCommand}" InputGesture="Enter" />
+        <MenuItem Header="Cancel Transform" Command="{Binding CancelTransformCommand}" InputGesture="Escape" />
       </MenuItem>
       <MenuItem Header="_View">
         <MenuItem Header="_Fit to Window" Command="{Binding FitToWindowCommand}" InputGesture="Ctrl+0" />
@@ -94,6 +98,9 @@
           <Button ToolTip.Tip="Pan (H / Space+drag)"
                   Command="{Binding SetToolPanCommand}"
                   HorizontalAlignment="Stretch" Height="40" Content="Pan" FontSize="12" />
+          <Button ToolTip.Tip="Free Transform (Ctrl+T)"
+                  Command="{Binding ToggleFreeTransformCommand}"
+                  HorizontalAlignment="Stretch" Height="40" Content="Xform" FontSize="11" />
           <Separator Margin="0,8" />
           <Button ToolTip.Tip="Fit" Command="{Binding FitToWindowCommand}"
                   HorizontalAlignment="Stretch" Height="32" Content="Fit" FontSize="11" />
@@ -102,12 +109,25 @@
         </StackPanel>
       </Border>
 
-      <!-- Canvas -->
-      <Border Grid.Column="1" Background="#1E1E1E">
-        <ctrl:ImageCanvas x:Name="Canvas"
-                          Workspace="{Binding ActiveWorkspace}"
-                          Tool="{Binding CurrentTool}" />
-      </Border>
+      <!-- Canvas + transform options bar -->
+      <DockPanel Grid.Column="1">
+        <Border DockPanel.Dock="Top" Background="#2D2D30" Padding="8,4"
+                IsVisible="{Binding IsTransforming}">
+          <Grid ColumnDefinitions="*,Auto,Auto">
+            <TextBlock Text="{Binding TransformInfo}" VerticalAlignment="Center"
+                       FontSize="12" Foreground="#EEE" TextWrapping="NoWrap" />
+            <Button Grid.Column="1" Content="Apply" Margin="8,0" Padding="10,2"
+                    Command="{Binding CommitTransformCommand}" />
+            <Button Grid.Column="2" Content="Cancel" Padding="10,2"
+                    Command="{Binding CancelTransformCommand}" />
+          </Grid>
+        </Border>
+        <Border Background="#1E1E1E">
+          <ctrl:ImageCanvas x:Name="Canvas"
+                            Workspace="{Binding ActiveWorkspace}"
+                            Tool="{Binding CurrentTool}" />
+        </Border>
+      </DockPanel>
 
       <!-- Layers panel -->
       <Border Grid.Column="2" Background="#252526" BorderBrush="#3F3F46" BorderThickness="1,0,0,0">

@@ -26,6 +26,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     [ObservableProperty] public partial string ZoomText { get; set; } = "100%";
     [ObservableProperty] public partial string CursorText { get; set; } = "";
     [ObservableProperty] public partial string SizeText { get; set; } = "";
+    [ObservableProperty] public partial bool IsTransforming { get; set; }
+    [ObservableProperty] public partial string TransformInfo { get; set; } = "";
 
     public DocumentWorkspace? ActiveWorkspace => SelectedTab?.Workspace;
 
@@ -123,6 +125,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             ZoomText = "";
             CursorText = "";
             SizeText = "";
+            IsTransforming = false;
+            TransformInfo = "";
             return;
         }
 
@@ -130,7 +134,18 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         ZoomText = $"{ws.Zoom * 100:0.#}%";
         if (cursorX is int cx && cursorY is int cy)
             CursorText = $"{cx}, {cy}";
-        StatusText = ws.Document.IsDirty ? "Modified" : "Saved";
+        IsTransforming = ws.IsTransforming;
+        if (ws.ActiveTransform is { } t)
+        {
+            TransformInfo =
+                $"W:{t.ScaleX * 100:0.#}% H:{t.ScaleY * 100:0.#}%  ∠ {t.RotationDegrees:0.#}°  —  Enter apply · Esc cancel · Shift constrain · Alt from center";
+            StatusText = "Free Transform";
+        }
+        else
+        {
+            TransformInfo = "";
+            StatusText = ws.Document.IsDirty ? "Modified" : "Saved";
+        }
     }
 
     [RelayCommand]
@@ -335,13 +350,69 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     }
 
     [RelayCommand]
-    private void SetToolSelect() => CurrentTool = CanvasTool.RectSelect;
+    private void SetToolSelect()
+    {
+        if (ActiveWorkspace?.IsTransforming == true) ActiveWorkspace.CancelTransform();
+        CurrentTool = CanvasTool.RectSelect;
+        SyncTransformUi();
+    }
 
     [RelayCommand]
-    private void SetToolMove() => CurrentTool = CanvasTool.MoveLayer;
+    private void SetToolMove()
+    {
+        if (ActiveWorkspace?.IsTransforming == true) ActiveWorkspace.CancelTransform();
+        CurrentTool = CanvasTool.MoveLayer;
+        SyncTransformUi();
+    }
 
     [RelayCommand]
-    private void SetToolPan() => CurrentTool = CanvasTool.Pan;
+    private void SetToolPan()
+    {
+        if (ActiveWorkspace?.IsTransforming == true) ActiveWorkspace.CancelTransform();
+        CurrentTool = CanvasTool.Pan;
+        SyncTransformUi();
+    }
+
+    [RelayCommand]
+    private void ToggleFreeTransform()
+    {
+        var ws = ActiveWorkspace;
+        if (ws is null) return;
+        if (ws.IsTransforming)
+        {
+            ws.CancelTransform();
+            CurrentTool = CanvasTool.RectSelect;
+        }
+        else
+        {
+            if (ws.BeginTransform())
+                CurrentTool = CanvasTool.FreeTransform;
+        }
+        SyncTransformUi();
+    }
+
+    [RelayCommand]
+    private void CommitTransform()
+    {
+        ActiveWorkspace?.CommitTransform();
+        CurrentTool = CanvasTool.RectSelect;
+        SyncTransformUi();
+    }
+
+    [RelayCommand]
+    private void CancelTransform()
+    {
+        ActiveWorkspace?.CancelTransform();
+        CurrentTool = CanvasTool.RectSelect;
+        SyncTransformUi();
+    }
+
+    public void SyncTransformUi()
+    {
+        IsTransforming = ActiveWorkspace?.IsTransforming == true;
+        UpdateStatus();
+        OnPropertyChanged(nameof(ActiveWorkspace));
+    }
 
     [RelayCommand]
     private void FitToWindow()

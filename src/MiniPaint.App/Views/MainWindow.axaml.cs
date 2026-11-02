@@ -35,6 +35,7 @@ public partial class MainWindow : Window
             Vm.UpdateStatus(Canvas.CursorDocX, Canvas.CursorDocY);
             Vm.ZoomText = Vm.ActiveWorkspace is { } w ? $"{w.Zoom * 100:0.#}%" : "";
         };
+        Canvas.TransformModeChanged += () => Vm.SyncTransformUi();
 
         // Start with a blank document so the app is immediately usable.
         if (Vm.Tabs.Count == 0)
@@ -48,7 +49,15 @@ public partial class MainWindow : Window
 
         bool ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
 
-        if (ctrl && e.Key == Key.C) { vm.CopyCommand.Execute(null); e.Handled = true; }
+        // Transform mode takes priority for Enter / Esc
+        if (vm.IsTransforming)
+        {
+            if (e.Key == Key.Enter) { vm.CommitTransformCommand.Execute(null); e.Handled = true; return; }
+            if (e.Key == Key.Escape) { vm.CancelTransformCommand.Execute(null); e.Handled = true; return; }
+        }
+
+        if (ctrl && e.Key == Key.T) { vm.ToggleFreeTransformCommand.Execute(null); e.Handled = true; }
+        else if (ctrl && e.Key == Key.C) { vm.CopyCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.X) { vm.CutCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.V) { vm.PasteCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.A) { vm.SelectAllCommand.Execute(null); e.Handled = true; }
@@ -61,9 +70,9 @@ public partial class MainWindow : Window
         else if (ctrl && e.Key == Key.W) { vm.CloseDocumentCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.D0) { vm.FitToWindowCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.D1) { vm.Zoom100Command.Execute(null); e.Handled = true; }
-        else if (e.Key == Key.V) { vm.SetToolSelectCommand.Execute(null); e.Handled = true; }
-        else if (e.Key == Key.M) { vm.SetToolMoveCommand.Execute(null); e.Handled = true; }
-        else if (e.Key == Key.H) { vm.SetToolPanCommand.Execute(null); e.Handled = true; }
+        else if (e.Key == Key.V && !vm.IsTransforming) { vm.SetToolSelectCommand.Execute(null); e.Handled = true; }
+        else if (e.Key == Key.M && !vm.IsTransforming) { vm.SetToolMoveCommand.Execute(null); e.Handled = true; }
+        else if (e.Key == Key.H && !vm.IsTransforming) { vm.SetToolPanCommand.Execute(null); e.Handled = true; }
     }
 
     private void OnVisibilityClick(object? sender, RoutedEventArgs e)
