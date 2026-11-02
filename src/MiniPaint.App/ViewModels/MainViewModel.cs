@@ -4,6 +4,7 @@ using Avalonia.Platform.Storage;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using MiniPaint.App.Controls;
+using MiniPaint.App.Logging;
 using MiniPaint.Core.Document;
 using MiniPaint.Core.History;
 using MiniPaint.Core.Imaging;
@@ -41,6 +42,14 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     {
         _window = window;
         WireClipboard();
+        AppLog.Info("MainViewModel attached to MainWindow");
+    }
+
+    [RelayCommand]
+    private void OpenLogFolder()
+    {
+        AppLog.Info("OpenLogFolder requested");
+        AppLog.OpenLogFolder();
     }
 
     private void WireClipboard()
@@ -168,10 +177,18 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         {
             var path = file.TryGetLocalPath();
             if (path is null) continue;
-            if (path.EndsWith(ProjectSerializer.Extension, StringComparison.OrdinalIgnoreCase))
-                _manager.OpenProject(path);
-            else
-                _manager.OpenImage(path);
+            try
+            {
+                AppLog.Info($"Opening: {path}");
+                if (path.EndsWith(ProjectSerializer.Extension, StringComparison.OrdinalIgnoreCase))
+                    _manager.OpenProject(path);
+                else
+                    _manager.OpenImage(path);
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error($"Failed to open {path}", ex);
+            }
         }
     }
 
@@ -378,15 +395,26 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     {
         var ws = ActiveWorkspace;
         if (ws is null) return;
-        if (ws.IsTransforming)
+        try
         {
-            ws.CancelTransform();
-            CurrentTool = CanvasTool.RectSelect;
+            if (ws.IsTransforming)
+            {
+                AppLog.Info("FreeTransform cancel via toggle");
+                ws.CancelTransform();
+                CurrentTool = CanvasTool.RectSelect;
+            }
+            else
+            {
+                if (ws.BeginTransform())
+                {
+                    AppLog.Info($"FreeTransform begin layer={ws.Document.ActiveLayer?.Name}");
+                    CurrentTool = CanvasTool.FreeTransform;
+                }
+            }
         }
-        else
+        catch (Exception ex)
         {
-            if (ws.BeginTransform())
-                CurrentTool = CanvasTool.FreeTransform;
+            AppLog.Error("ToggleFreeTransform failed", ex);
         }
         SyncTransformUi();
     }
@@ -394,7 +422,15 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private void CommitTransform()
     {
-        ActiveWorkspace?.CommitTransform();
+        try
+        {
+            AppLog.Info("FreeTransform commit");
+            ActiveWorkspace?.CommitTransform();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("CommitTransform failed", ex);
+        }
         CurrentTool = CanvasTool.RectSelect;
         SyncTransformUi();
     }
@@ -402,6 +438,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private void CancelTransform()
     {
+        AppLog.Info("FreeTransform cancel");
         ActiveWorkspace?.CancelTransform();
         CurrentTool = CanvasTool.RectSelect;
         SyncTransformUi();

@@ -4,6 +4,7 @@ using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
+using MiniPaint.App.Logging;
 using MiniPaint.Core.Document;
 using MiniPaint.Core.History;
 using MiniPaint.Core.Transform;
@@ -343,7 +344,17 @@ public sealed class ImageCanvas : Control
                 _moveIx.Update(cdx, cdy, constrainAxis: shift);
             }
 
-            ws.RefreshTransformPreview();
+            try
+            {
+                ws.RefreshTransformPreview();
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error("RefreshTransformPreview failed during drag", ex);
+                _scaleIx = null;
+                _rotateIx = null;
+                _moveIx = null;
+            }
             e.Handled = true;
             return;
         }

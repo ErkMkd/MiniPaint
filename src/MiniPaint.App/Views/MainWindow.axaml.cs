@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using MiniPaint.App.Controls;
+using MiniPaint.App.Logging;
 using MiniPaint.App.ViewModels;
 
 namespace MiniPaint.App.Views;
@@ -19,6 +20,7 @@ public partial class MainWindow : Window
     private void OnOpened(object? sender, EventArgs e)
     {
         if (Vm is null) return;
+        AppLog.Info($"MainWindow opened size={Bounds.Width}x{Bounds.Height}");
         Vm.AttachWindow(this);
         Vm.FitRequested += () =>
         {

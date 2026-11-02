@@ -57,6 +57,9 @@
         <MenuItem Header="Move _Up" Command="{Binding MoveLayerUpCommand}" />
         <MenuItem Header="Move Do_wn" Command="{Binding MoveLayerDownCommand}" />
       </MenuItem>
+      <MenuItem Header="_Help">
+        <MenuItem Header="Open _Log Folder" Command="{Binding OpenLogFolderCommand}" />
+      </MenuItem>
     </Menu>
 
     <!-- Status bar -->

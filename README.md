@@ -12,11 +12,19 @@ Local Windows 2D image editor — C# / .NET 10, Avalonia UI, SkiaSharp.
 
 ```powershell
 cd d:\MiniPaint
-dotnet restore
-dotnet build
+dotnet restore MiniPaint.slnx
+dotnet build MiniPaint.slnx
 dotnet test
 dotnet run --project src\MiniPaint.App
+# or: MiniPaint.bat / src\MiniPaint.App\bin\Debug\net10.0\win-x64\MiniPaint.App.exe
 ```
+
+## Logs (crashes)
+
+Session logs: `%LocalAppData%\MiniPaint\logs\`  
+Last fatal dump: `%LocalAppData%\MiniPaint\logs\crash-last.txt`  
+
+In the app: **Help → Open Log Folder**.
 
 ## Features
 
