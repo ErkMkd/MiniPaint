@@ -1,14 +1,74 @@
+# Build outputs
 bin/
 obj/
+out/
+publish/
+dist/
+[Bb]uild/
+[Ll]og/
+[Ll]ogs/
+
+# Visual Studio / Rider / VS Code
 .vs/
+.vscode/
+.idea/
 *.user
+*.userosscache
 *.suo
+*.sln.docstates
+*.rsuser
+
+# NuGet
+*.nupkg
+**/packages/*
+!**/packages/build/
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Native / generated binaries
+*.exe
+*.dll
+*.pdb
+*.cache
+*.ilk
+*.meta
+*.obj
+*.o
+*.a
+*.lib
+*.so
+*.dylib
+*.app
+
+# Keep launcher script (not a binary)
+!MiniPaint.bat
+
+# Test / coverage
+TestResults/
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+coverage*/
+
+# Logs & local crash dumps
 *.log
 build-*.log
 test-*.log
-tools/GenSample/bin/
-tools/GenSample/obj/
-
 crash-*.txt
 tf-*.txt
-*.log
+
+# OS junk
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Avalonia / generated
+**/Generated_Code/
+*_wpftmp.csproj
+
+# Publish / single-file leftovers
+*.deps.json
+*.runtimeconfig.json
+*.runtimeconfig.dev.json
