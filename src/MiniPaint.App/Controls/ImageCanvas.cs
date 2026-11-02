@@ -281,13 +281,17 @@ public sealed class ImageCanvas : Control
         DrawCheckerboard(context, ws);
 
         var dest = new Rect(ws.PanX, ws.PanY, ws.Document.Width * ws.Zoom, ws.Document.Height * ws.Zoom);
-        var interp = ws.Zoom >= 4.0
-            ? BitmapInterpolationMode.None
-            : BitmapInterpolationMode.HighQuality;
-
-        // Avalonia RenderOptions via RenderOptions.SetBitmapInterpolationMode on control is set below.
-        RenderOptions.SetBitmapInterpolationMode(this, interp);
-        context.DrawImage(_bitmap, new Rect(0, 0, _bitmap.PixelSize.Width, _bitmap.PixelSize.Height), dest);
+        // Nearest-neighbor at high zoom; must use PushRenderOptions (not Set* on Visual) inside Render.
+        var renderOpts = new RenderOptions
+        {
+            BitmapInterpolationMode = ws.Zoom >= 4.0
+                ? BitmapInterpolationMode.None
+                : BitmapInterpolationMode.HighQuality
+        };
+        using (context.PushRenderOptions(renderOpts))
+        {
+            context.DrawImage(_bitmap, new Rect(0, 0, _bitmap.PixelSize.Width, _bitmap.PixelSize.Height), dest);
+        }
 
         if (ws.Selection.HasSelection)
             DrawMarchingAnts(context, ws);
