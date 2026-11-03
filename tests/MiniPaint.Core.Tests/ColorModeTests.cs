@@ -81,4 +81,39 @@ public class ColorModeTests
         Assert.Equal(127, ehb[2].R); // 255/2
         Assert.Equal(0, ehb[2].G);
     }
+
+    [Fact]
+    public void Ecs_4096ColorSpace_NibblesRoundTrip()
+    {
+        Assert.Equal(4096, AmigaColorSpace.EcsColorSpaceSize);
+        int distinct = 0;
+        var seen = new HashSet<PaletteRgb>();
+        for (int r = 0; r < 16; r++)
+        for (int g = 0; g < 16; g++)
+        for (int b = 0; b < 16; b++)
+        {
+            var c = AmigaColorSpace.FromNibbles(r, g, b);
+            Assert.True(seen.Add(c));
+            var (nr, ng, nb) = AmigaColorSpace.ToNibbles(c);
+            Assert.Equal(r, nr);
+            Assert.Equal(g, ng);
+            Assert.Equal(b, nb);
+            distinct++;
+        }
+        Assert.Equal(4096, distinct);
+    }
+
+    [Fact]
+    public void SetPalette_Ecs_SnapsTo12Bit()
+    {
+        var s = new DocumentColorSettings { Mode = ColorModeKind.Ecs, ColorCount = 4 };
+        s.Sanitize();
+        s.SetPalette([new PaletteRgb(10, 20, 30), new(100, 150, 200)], customized: true);
+        Assert.True(s.HasValidPalette);
+        foreach (var c in s.Palette!)
+        {
+            var snapped = AmigaColorSpace.SnapColor(c, 4);
+            Assert.Equal(snapped, c);
+        }
+    }
 }

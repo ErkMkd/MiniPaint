@@ -82,7 +82,7 @@ public partial class ColorModeViewModel : ViewModelBase
         OnPropertyChanged(nameof(Subtitle));
     }
 
-    public DocumentColorSettings ToSettings()
+    public DocumentColorSettings ToSettings(DocumentColorSettings? previous = null)
     {
         var s = new DocumentColorSettings
         {
@@ -99,6 +99,18 @@ public partial class ColorModeViewModel : ViewModelBase
             HalfBright = SelectedMode.Kind == ColorModeKind.Ecs && SelectedEcsCount == 64
         };
         s.Sanitize();
+
+        // Keep existing palette when only dither (or identical mode/count/quantizer) changes.
+        if (previous is not null &&
+            previous.Mode == s.Mode &&
+            previous.ColorCount == s.ColorCount &&
+            previous.Quantizer == s.Quantizer &&
+            previous.HasValidPalette &&
+            previous.Palette is not null)
+        {
+            s.SetPalette(previous.Palette, previous.PaletteCustomized);
+        }
+
         return s;
     }
 }

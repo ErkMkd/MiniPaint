@@ -111,6 +111,8 @@ public partial class MainWindow : Window
         else if (ctrl && alt && e.Key == Key.C) { vm.CanvasSizeCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.KeyModifiers.HasFlag(KeyModifiers.Shift) && e.Key == Key.M)
         { vm.ImageModeCommand.Execute(null); e.Handled = true; }
+        else if (ctrl && e.KeyModifiers.HasFlag(KeyModifiers.Shift) && e.Key == Key.P)
+        { vm.EditPaletteCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.T) { vm.ToggleFreeTransformCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.C) { vm.CopyCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.X) { vm.CutCommand.Execute(null); e.Handled = true; }

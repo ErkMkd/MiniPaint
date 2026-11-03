@@ -3,6 +3,10 @@ namespace MiniPaint.Core.ColorMode;
 /// <summary>Amiga ECS (12-bit / 4096) and AGA (24-bit) channel helpers + Extra Half-Brite.</summary>
 public static class AmigaColorSpace
 {
+    /// <summary>ECS: 16 levels per channel → 16³ = 4096 colors.</summary>
+    public const int EcsLevelsPerChannel = 16;
+    public const int EcsColorSpaceSize = EcsLevelsPerChannel * EcsLevelsPerChannel * EcsLevelsPerChannel; // 4096
+
     public static byte SnapChannel(byte value, int bitsPerChannel)
     {
         if (bitsPerChannel >= 8) return value;
@@ -17,6 +21,22 @@ public static class AmigaColorSpace
 
     public static PaletteRgb SnapColor(PaletteRgb c, int bitsPerChannel) =>
         SnapColor(c.R, c.G, c.B, bitsPerChannel);
+
+    /// <summary>Map 0–255 byte → ECS nibble 0–15.</summary>
+    public static int ToNibble(byte value8) => (value8 * 15 + 127) / 255;
+
+    /// <summary>Map ECS nibble 0–15 → display byte (equally spaced in 0–255).</summary>
+    public static byte FromNibble(int nibble4)
+    {
+        nibble4 = Math.Clamp(nibble4, 0, 15);
+        return (byte)((nibble4 * 255) / 15);
+    }
+
+    public static PaletteRgb FromNibbles(int r, int g, int b) =>
+        new(FromNibble(r), FromNibble(g), FromNibble(b));
+
+    public static (int r, int g, int b) ToNibbles(PaletteRgb c) =>
+        (ToNibble(c.R), ToNibble(c.G), ToNibble(c.B));
 
     public static PaletteRgb HalfBright(PaletteRgb c) =>
         new((byte)(c.R / 2), (byte)(c.G / 2), (byte)(c.B / 2));

@@ -108,6 +108,13 @@ public static class IlbmCodec
         doc.ColorSettings.Quantizer = QuantizerKind.MedianCut;
         doc.ColorSettings.Dither = DitherKind.None;
         doc.ColorSettings.Sanitize();
+
+        // Store editable unique palette (EHB mirrors are derived, not stored).
+        var unique = img.ExtraHalfBrite && img.Palette.Length >= 64
+            ? img.Palette.Take(32).ToArray()
+            : img.Palette;
+        if (unique.Length > 0)
+            doc.ColorSettings.SetPalette(unique, customized: true);
     }
 
     private static IlbmImage Parse(byte[] data)

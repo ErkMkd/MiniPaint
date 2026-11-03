@@ -53,6 +53,8 @@ public static class ProjectSerializer
                 HalfBright = cs.HalfBright,
                 Quantizer = cs.Quantizer.ToString(),
                 Dither = cs.Dither.ToString(),
+                PaletteCustomized = cs.PaletteCustomized,
+                Palette = cs.Palette?.Select(c => $"{c.R:X2}{c.G:X2}{c.B:X2}").ToList(),
                 Layers = document.Layers.Select((l, i) => new LayerManifest
                 {
                     Name = l.Name,
@@ -150,6 +152,20 @@ public static class ProjectSerializer
         if (Enum.TryParse<DitherKind>(manifest.Dither, ignoreCase: true, out var d))
             doc.ColorSettings.Dither = d;
         doc.ColorSettings.Sanitize();
+        if (manifest.Palette is { Count: > 0 })
+        {
+            var colors = new List<PaletteRgb>(manifest.Palette.Count);
+            foreach (var hex in manifest.Palette)
+            {
+                if (hex is null || hex.Length < 6) continue;
+                if (byte.TryParse(hex.AsSpan(0, 2), System.Globalization.NumberStyles.HexNumber, null, out var r) &&
+                    byte.TryParse(hex.AsSpan(2, 2), System.Globalization.NumberStyles.HexNumber, null, out var g) &&
+                    byte.TryParse(hex.AsSpan(4, 2), System.Globalization.NumberStyles.HexNumber, null, out var b))
+                    colors.Add(new PaletteRgb(r, g, b));
+            }
+            if (colors.Count > 0)
+                doc.ColorSettings.SetPalette(colors, manifest.PaletteCustomized ?? true);
+        }
 
         doc.IsDirty = false;
         return doc;
@@ -195,6 +211,8 @@ public static class ProjectSerializer
         public bool? HalfBright { get; set; }
         public string? Quantizer { get; set; }
         public string? Dither { get; set; }
+        public bool? PaletteCustomized { get; set; }
+        public List<string>? Palette { get; set; }
         public List<LayerManifest> Layers { get; set; } = new();
     }
 

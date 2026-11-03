@@ -49,6 +49,7 @@
       </MenuItem>
       <MenuItem Header="_Image">
         <MenuItem Header="_Mode..." Command="{Binding ImageModeCommand}" InputGesture="Ctrl+Shift+M" />
+        <MenuItem Header="_Palette..." Command="{Binding EditPaletteCommand}" InputGesture="Ctrl+Shift+P" />
         <MenuItem Header="_Image Size..." Command="{Binding ImageSizeCommand}" InputGesture="Ctrl+Alt+I" />
         <MenuItem Header="_Canvas Size..." Command="{Binding CanvasSizeCommand}" InputGesture="Ctrl+Alt+C" />
       </MenuItem>

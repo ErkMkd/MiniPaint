@@ -1,0 +1,68 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:MiniPaint.App.ViewModels"
+        x:Class="MiniPaint.App.Views.PaletteEditorWindow"
+        x:DataType="vm:PaletteEditorViewModel"
+        Width="560" Height="520"
+        MinWidth="480" MinHeight="420"
+        WindowStartupLocation="CenterOwner"
+        Background="#2D2D30"
+        Foreground="#DDDDDD"
+        Title="{Binding Title}">
+
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="Rebuild from image" Command="{Binding RebuildFromImageCommand}" Margin="0,0,16,0" />
+      <Button Content="OK" Width="88" IsDefault="True" Click="OnOkClick" />
+      <Button Content="Cancel" Width="88" IsCancel="True" Click="OnCancelClick" />
+    </StackPanel>
+
+    <Grid RowDefinitions="Auto,*,Auto" RowSpacing="12">
+      <TextBlock Text="{Binding Subtitle}" TextWrapping="Wrap" Foreground="#AAA" FontSize="12" />
+
+      <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+        <ItemsControl ItemsSource="{Binding Swatches}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <UniformGrid Columns="16" />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:PaletteSwatchItem">
+              <Button Margin="2" Width="28" Height="28" Padding="0"
+                      Background="{Binding Fill}"
+                      ToolTip.Tip="{Binding Tip}"
+                      Tag="{Binding}"
+                      Click="OnSwatchClick"
+                      BorderBrush="#666" BorderThickness="1" />
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+
+      <Border Grid.Row="2" Background="#252526" Padding="12" CornerRadius="4"
+              IsEnabled="{Binding CanEditSelected}">
+        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="12" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="8">
+          <TextBlock Grid.ColumnSpan="2" Text="{Binding ChannelLabel}" Foreground="#CCC" FontSize="12" />
+          <Border Grid.Column="2" Width="48" Height="48" CornerRadius="4"
+                  Background="{Binding PreviewBrush}" BorderBrush="#888" BorderThickness="1" />
+
+          <TextBlock Grid.Row="1" Text="R" VerticalAlignment="Center" Width="16" />
+          <NumericUpDown Grid.Row="1" Grid.Column="1" Minimum="0" Maximum="{Binding ChannelMax}"
+                         Increment="1" FormatString="0" Value="{Binding ChannelR}" />
+
+          <TextBlock Grid.Row="2" Text="G" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Row="2" Grid.Column="1" Minimum="0" Maximum="{Binding ChannelMax}"
+                         Increment="1" FormatString="0" Value="{Binding ChannelG}" />
+
+          <TextBlock Grid.Row="3" Text="B" VerticalAlignment="Center" />
+          <NumericUpDown Grid.Row="3" Grid.Column="1" Minimum="0" Maximum="{Binding ChannelMax}"
+                         Increment="1" FormatString="0" Value="{Binding ChannelB}" />
+
+          <TextBlock Grid.Row="4" Grid.ColumnSpan="3" Text="{Binding HexLabel}"
+                     Foreground="#888" FontSize="11" FontFamily="Consolas,Courier New,monospace" />
+        </Grid>
+      </Border>
+    </Grid>
+  </DockPanel>
+</Window>

@@ -14,21 +14,19 @@ public static class ColorModePipeline
         settings.Sanitize();
         if (settings.Mode == ColorModeKind.Rgba) return;
 
-        int uniqueSlots = settings.EffectivePaletteSlots;
-        int bits = settings.BitsPerChannel;
-        var unique = Quantizers.BuildPalette(buffer, uniqueSlots, bits, settings.Quantizer);
-
-        PaletteRgb[] displayPalette = settings.Mode == ColorModeKind.Ecs && settings.HalfBright
-            ? AmigaColorSpace.ExpandExtraHalfBrite(unique)
-            : unique;
+        var displayPalette = ResolveDisplayPalette(buffer, settings, storeIfBuilt: true);
 
         if (settings.Dither == DitherKind.FloydSteinberg)
-            MapFloydSteinberg(buffer, displayPalette, bits);
+            MapFloydSteinberg(buffer, displayPalette, settings.BitsPerChannel);
         else
-            MapNearest(buffer, displayPalette, bits);
+            MapNearest(buffer, displayPalette, settings.BitsPerChannel);
     }
 
-    public static PaletteRgb[] BuildDisplayPalette(PixelBuffer buffer, DocumentColorSettings settings)
+    /// <summary>
+    /// Unique palette (no EHB mirrors). Builds via quantizer when missing unless customized empty.
+    /// </summary>
+    public static PaletteRgb[] EnsureUniquePalette(
+        PixelBuffer buffer, DocumentColorSettings settings, bool forceRebuild = false)
     {
         ArgumentNullException.ThrowIfNull(buffer);
         ArgumentNullException.ThrowIfNull(settings);
@@ -36,11 +34,44 @@ public static class ColorModePipeline
         if (settings.Mode == ColorModeKind.Rgba)
             return Array.Empty<PaletteRgb>();
 
-        var unique = Quantizers.BuildPalette(buffer, settings.EffectivePaletteSlots, settings.BitsPerChannel, settings.Quantizer);
+        if (!forceRebuild && settings.HasValidPalette && settings.Palette is not null)
+            return settings.Palette.ToArray();
+
+        var unique = Quantizers.BuildPalette(
+            buffer, settings.EffectivePaletteSlots, settings.BitsPerChannel, settings.Quantizer);
+        settings.SetPalette(unique, customized: false);
+        return unique;
+    }
+
+    public static PaletteRgb[] ResolveDisplayPalette(
+        PixelBuffer buffer, DocumentColorSettings settings, bool storeIfBuilt = false)
+    {
+        ArgumentNullException.ThrowIfNull(buffer);
+        ArgumentNullException.ThrowIfNull(settings);
+        settings.Sanitize();
+        if (settings.Mode == ColorModeKind.Rgba)
+            return Array.Empty<PaletteRgb>();
+
+        PaletteRgb[] unique;
+        if (settings.HasValidPalette && settings.Palette is not null)
+        {
+            unique = settings.Palette.ToArray();
+        }
+        else
+        {
+            unique = Quantizers.BuildPalette(
+                buffer, settings.EffectivePaletteSlots, settings.BitsPerChannel, settings.Quantizer);
+            if (storeIfBuilt)
+                settings.SetPalette(unique, customized: false);
+        }
+
         return settings.Mode == ColorModeKind.Ecs && settings.HalfBright
             ? AmigaColorSpace.ExpandExtraHalfBrite(unique)
             : unique;
     }
+
+    public static PaletteRgb[] BuildDisplayPalette(PixelBuffer buffer, DocumentColorSettings settings) =>
+        ResolveDisplayPalette(buffer, settings, storeIfBuilt: false);
 
     /// <summary>
     /// Quantize to palette indices (for IFF-ILBM export). Throws if mode is RGBA.
@@ -54,7 +85,7 @@ public static class ColorModePipeline
         if (settings.Mode == ColorModeKind.Rgba)
             throw new InvalidOperationException("IFF-ILBM export requires Indexed, ECS, or AGA mode.");
 
-        var palette = BuildDisplayPalette(buffer, settings);
+        var palette = ResolveDisplayPalette(buffer, settings, storeIfBuilt: true);
         int w = buffer.Width;
         int h = buffer.Height;
         var indices = new byte[w * h];
@@ -104,7 +135,6 @@ public static class ColorModePipeline
             px[i] = c.R;
             px[i + 1] = c.G;
             px[i + 2] = c.B;
-            // keep alpha
         }
     }
 
@@ -114,7 +144,6 @@ public static class ColorModePipeline
         int h = buffer.Height;
         var px = buffer.Pixels;
 
-        // Working floats in RGB for error diffusion (opaque pixels only).
         var r = new float[w * h];
         var g = new float[w * h];
         var b = new float[w * h];

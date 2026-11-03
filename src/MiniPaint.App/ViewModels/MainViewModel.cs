@@ -376,7 +376,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         var ok = await dlg.ShowDialog<bool?>(_window);
         if (ok != true) return;
 
-        var after = vm.ToSettings();
+        var after = vm.ToSettings(before);
         if (before.Equals(after)) return;
 
         try
@@ -392,6 +392,48 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         {
             AppLog.Error("Image mode failed", ex);
             StatusText = "Image mode failed — see log";
+        }
+    }
+
+    [RelayCommand]
+    private async Task EditPaletteAsync()
+    {
+        var ws = ActiveWorkspace;
+        if (ws is null || _window is null) return;
+
+        ws.Document.ColorSettings.Sanitize();
+        if (ws.Document.ColorSettings.Mode == ColorModeKind.Rgba)
+        {
+            StatusText = "Palette editor requires Indexed / ECS / AGA mode.";
+            return;
+        }
+
+        if (ws.IsTransforming) ws.CancelTransform();
+        if (ws.IsEditingSelection) ws.CancelSelectionEdit();
+
+        // Ensure a palette exists before editing (quantizes once if needed).
+        using var composite = CompositionEngine.Composite(ws.Document);
+        ColorModePipeline.EnsureUniquePalette(composite, ws.Document.ColorSettings);
+        var before = ws.Document.ColorSettings.Clone();
+
+        var vm = new PaletteEditorViewModel(ws.Document.ColorSettings, composite);
+        var dlg = new Views.PaletteEditorWindow(vm);
+        var ok = await dlg.ShowDialog<bool?>(_window);
+        if (ok != true) return;
+
+        var after = vm.ResultSettings;
+        if (before.Equals(after)) return;
+
+        try
+        {
+            ws.History.Execute(new ColorSettingsCommand(ws.Document, before, after, ws.NotifyChanged));
+            UpdateStatus();
+            AppLog.Info($"Palette edited ({after.EffectivePaletteSlots} colors, customized={after.PaletteCustomized})");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Palette edit failed", ex);
+            StatusText = "Palette edit failed — see log";
         }
     }
 
