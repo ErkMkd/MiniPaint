@@ -18,11 +18,19 @@ public sealed class DocumentWorkspace : IDisposable
     private bool _compositeDirty = true;
     private bool _disposed;
 
+    /// <summary>Source layer when Free Transform is lifting a selection (float is not in Layers).</summary>
+    private Layer? _selectionTransformSource;
+    private PixelBuffer? _selectionTransformBefore;
+    private int _selectionOriginX, _selectionOriginY, _selectionOriginW, _selectionOriginH;
+
     public PaintDocument Document { get; }
     public SelectionState Selection { get; } = new();
     public HistoryStack History { get; } = new();
     public FreeTransformSession? ActiveTransform { get; private set; }
     public bool IsTransforming => ActiveTransform is not null;
+
+    /// <summary>True when Free Transform is operating on lifted selection pixels (not the whole layer).</summary>
+    public bool IsSelectionTransform => _selectionTransformSource is not null;
 
     public SelectionEditSession? ActiveSelectionEdit { get; private set; }
     public bool IsEditingSelection => ActiveSelectionEdit is not null;
@@ -68,6 +76,17 @@ public sealed class DocumentWorkspace : IDisposable
         if (_compositeDirty)
         {
             CompositionEngine.CompositeInto(Document, _compositeCache);
+            // Selection Free Transform floats above the document (hole already cut in source).
+            if (IsSelectionTransform && ActiveTransform is { Layer: { } floatLayer })
+            {
+                PixelOps.BlendLayer(
+                    _compositeCache,
+                    floatLayer.Pixels,
+                    floatLayer.OffsetX,
+                    floatLayer.OffsetY,
+                    floatLayer.Opacity,
+                    floatLayer.BlendMode);
+            }
             if (Document.ColorSettings.Mode != ColorModeKind.Rgba)
                 ColorModePipeline.ApplyInPlace(_compositeCache, Document.ColorSettings);
             _compositeDirty = false;
@@ -165,6 +184,7 @@ public sealed class DocumentWorkspace : IDisposable
 
     public void Deselect()
     {
+        if (IsTransforming) return;
         if (IsEditingSelection)
             CancelSelectionEdit();
         Selection.Clear();
@@ -215,8 +235,41 @@ public sealed class DocumentWorkspace : IDisposable
             CancelSelectionEdit();
         var layer = Document.ActiveLayer;
         if (layer is null) return false;
+
+        if (Selection.HasSelection)
+            return BeginSelectionTransform(layer);
+
         ActiveTransform = new FreeTransformSession(layer);
         Selection.Clear();
+        Changed?.Invoke();
+        return true;
+    }
+
+    /// <summary>
+    /// Lift selection pixels (like Move), free-transform the float, keep the marquee on the quad AABB.
+    /// </summary>
+    private bool BeginSelectionTransform(Layer sourceLayer)
+    {
+        var before = sourceLayer.Pixels.Clone();
+        var lifted = SelectionOps.CutFromActiveLayer(Document, Selection);
+        if (lifted is null)
+        {
+            before.Dispose();
+            return false;
+        }
+
+        _selectionOriginX = Selection.X;
+        _selectionOriginY = Selection.Y;
+        _selectionOriginW = Selection.Width;
+        _selectionOriginH = Selection.Height;
+        _selectionTransformSource = sourceLayer;
+        _selectionTransformBefore = before;
+
+        // Orphan layer: composited in GetComposite, not listed in Document.Layers.
+        var floatLayer = new Layer("Selection", lifted, Selection.X, Selection.Y);
+        ActiveTransform = new FreeTransformSession(floatLayer);
+        SyncSelectionToTransformBounds();
+        InvalidateComposite();
         Changed?.Invoke();
         return true;
     }
@@ -229,6 +282,8 @@ public sealed class DocumentWorkspace : IDisposable
         ActiveTransform.Layer.ReplacePixels(pixels);
         ActiveTransform.Layer.OffsetX = ox;
         ActiveTransform.Layer.OffsetY = oy;
+        if (IsSelectionTransform)
+            SyncSelectionToTransformBounds();
         InvalidateComposite();
         Changed?.Invoke();
     }
@@ -237,6 +292,22 @@ public sealed class DocumentWorkspace : IDisposable
     {
         if (ActiveTransform is null) return;
         var session = ActiveTransform;
+
+        if (IsSelectionTransform)
+        {
+            var source = _selectionTransformSource!;
+            var before = _selectionTransformBefore!;
+            source.ReplacePixels(before.Clone());
+            Selection.Set(_selectionOriginX, _selectionOriginY, _selectionOriginW, _selectionOriginH);
+            ActiveTransform = null;
+            session.Layer.Dispose();
+            session.Dispose();
+            ClearSelectionTransformState(disposeBefore: true);
+            InvalidateComposite();
+            Changed?.Invoke();
+            return;
+        }
+
         session.Layer.ReplacePixels(session.OriginalPixels.Clone());
         session.Layer.OffsetX = session.OriginalOffsetX;
         session.Layer.OffsetY = session.OriginalOffsetY;
@@ -251,11 +322,43 @@ public sealed class DocumentWorkspace : IDisposable
         if (ActiveTransform is null) return;
         RefreshTransformPreview();
         var session = ActiveTransform;
+
+        if (IsSelectionTransform)
+        {
+            var source = _selectionTransformSource!;
+            var before = _selectionTransformBefore!;
+            var floatLayer = session.Layer;
+
+            PixelOps.PasteOver(
+                source.Pixels,
+                source.OffsetX,
+                source.OffsetY,
+                floatLayer.Pixels,
+                floatLayer.OffsetX,
+                floatLayer.OffsetY);
+            var after = source.Pixels.Clone();
+
+            Selection.Set(floatLayer.OffsetX, floatLayer.OffsetY, floatLayer.Pixels.Width, floatLayer.Pixels.Height);
+            Selection.ClampToDocument(Document.Width, Document.Height);
+
+            ActiveTransform = null;
+            floatLayer.Dispose();
+            session.Dispose();
+            _selectionTransformBefore = null; // owned by history command
+            ClearSelectionTransformState(disposeBefore: false);
+
+            History.Record(new LayerPixelsCommand(
+                "Transform Selection", source, before, after, NotifyChanged));
+            Document.IsDirty = true;
+            Changed?.Invoke();
+            return;
+        }
+
         var layer = session.Layer;
-        var before = session.OriginalPixels.Clone();
+        var layerBefore = session.OriginalPixels.Clone();
         int beforeOx = session.OriginalOffsetX;
         int beforeOy = session.OriginalOffsetY;
-        var after = layer.Pixels.Clone();
+        var layerAfter = layer.Pixels.Clone();
         int afterOx = layer.OffsetX;
         int afterOy = layer.OffsetY;
 
@@ -263,9 +366,25 @@ public sealed class DocumentWorkspace : IDisposable
         session.Dispose();
 
         History.Record(new TransformLayerCommand(
-            layer, before, beforeOx, beforeOy, after, afterOx, afterOy, NotifyChanged));
+            layer, layerBefore, beforeOx, beforeOy, layerAfter, afterOx, afterOy, NotifyChanged));
         Document.IsDirty = true;
         Changed?.Invoke();
+    }
+
+    private void SyncSelectionToTransformBounds()
+    {
+        if (ActiveTransform is null) return;
+        var layer = ActiveTransform.Layer;
+        Selection.Set(layer.OffsetX, layer.OffsetY, layer.Pixels.Width, layer.Pixels.Height);
+    }
+
+    private void ClearSelectionTransformState(bool disposeBefore)
+    {
+        if (disposeBefore)
+            _selectionTransformBefore?.Dispose();
+        _selectionTransformBefore = null;
+        _selectionTransformSource = null;
+        _selectionOriginX = _selectionOriginY = _selectionOriginW = _selectionOriginH = 0;
     }
 
     public void Dispose()

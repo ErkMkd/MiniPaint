@@ -176,11 +176,13 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         IsEditingSelection = ws.IsEditingSelection;
         if (ws.ActiveTransform is { } t)
         {
-            TransformOpacity = ws.Document.ActiveLayer?.Opacity ?? SelectedLayer?.Opacity ?? 1f;
+            TransformOpacity = ws.IsSelectionTransform
+                ? 1f
+                : ws.Document.ActiveLayer?.Opacity ?? SelectedLayer?.Opacity ?? 1f;
             TransformInfo =
                 $"W:{t.ScaleX * 100:0.#}% H:{t.ScaleY * 100:0.#}%  ∠ {t.RotationDegrees:0.#}°  —  Enter apply · Esc cancel · Shift ratio · Alt = center (sinon ancre opposée)";
             SelectionEditInfo = "";
-            StatusText = "Free Transform";
+            StatusText = ws.IsSelectionTransform ? "Free Transform Selection" : "Free Transform";
         }
         else if (ws.IsEditingSelection && ws.Selection.HasSelection)
         {
@@ -761,7 +763,9 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             {
                 if (ws.BeginTransform())
                 {
-                    AppLog.Info($"FreeTransform begin layer={ws.Document.ActiveLayer?.Name}");
+                    AppLog.Info(ws.IsSelectionTransform
+                        ? $"FreeTransform selection begin layer={ws.Document.ActiveLayer?.Name} sel={ws.Selection.Width}x{ws.Selection.Height}@{ws.Selection.X},{ws.Selection.Y}"
+                        : $"FreeTransform begin layer={ws.Document.ActiveLayer?.Name}");
                     CurrentTool = CanvasTool.FreeTransform;
                 }
             }

@@ -62,6 +62,87 @@ public class TransformTests
     }
 
     [Fact]
+    public void Workspace_BeginTransform_WithSelection_LiftsContent()
+    {
+        var doc = PaintDocument.CreateBlank("t", 16, 16, transparent: true);
+        var layer = doc.ActiveLayer!;
+        layer.Pixels.FillRect(2, 2, 4, 4, 255, 0, 0, 255);
+        using var ws = new DocumentWorkspace(doc);
+        ws.Selection.Set(2, 2, 4, 4);
+
+        Assert.True(ws.BeginTransform());
+        Assert.True(ws.IsSelectionTransform);
+        Assert.True(ws.IsTransforming);
+        // Hole cut in source
+        Assert.Equal(0, layer.Pixels.PixelsReadOnly[layer.Pixels.Offset(2, 2) + 3]);
+        // Float layer holds the selection; marquee follows float bounds
+        Assert.Equal(4, ws.ActiveTransform!.BaseWidth);
+        Assert.Equal(4, ws.ActiveTransform.BaseHeight);
+        Assert.True(ws.Selection.HasSelection);
+        Assert.Single(doc.Layers); // float is not a document layer
+    }
+
+    [Fact]
+    public void Workspace_SelectionTransform_Move_CommitsOntoSource()
+    {
+        var doc = PaintDocument.CreateBlank("t", 16, 16, transparent: true);
+        var layer = doc.ActiveLayer!;
+        layer.Pixels.FillRect(2, 2, 3, 3, 0, 255, 0, 255);
+        using var ws = new DocumentWorkspace(doc);
+        ws.Selection.Set(2, 2, 3, 3);
+
+        Assert.True(ws.BeginTransform());
+        ws.ActiveTransform!.TranslateX = 5;
+        ws.ActiveTransform.TranslateY = 1;
+        ws.RefreshTransformPreview();
+        ws.CommitTransform();
+
+        Assert.False(ws.IsTransforming);
+        Assert.False(ws.IsSelectionTransform);
+        Assert.Single(doc.Layers);
+        // Original hole empty
+        Assert.Equal(0, layer.Pixels.PixelsReadOnly[layer.Pixels.Offset(2, 2) + 3]);
+        // Content pasted near new selection origin
+        Assert.True(ws.Selection.HasSelection);
+        int sx = ws.Selection.X;
+        int sy = ws.Selection.Y;
+        Assert.True(sx >= 6 && sx <= 8, $"sel X={sx}");
+        Assert.True(sy >= 2 && sy <= 4, $"sel Y={sy}");
+        Assert.Equal(255, layer.Pixels.PixelsReadOnly[layer.Pixels.Offset(sx, sy) + 3]);
+        Assert.Equal(255, layer.Pixels.PixelsReadOnly[layer.Pixels.Offset(sx, sy) + 1]); // green
+        Assert.True(ws.History.CanUndo);
+        ws.History.Undo();
+        Assert.Equal(255, layer.Pixels.PixelsReadOnly[layer.Pixels.Offset(2, 2) + 3]);
+        Assert.Equal(0, layer.Pixels.PixelsReadOnly[layer.Pixels.Offset(sx, sy) + 3]);
+    }
+
+    [Fact]
+    public void Workspace_SelectionTransform_Cancel_Restores()
+    {
+        var doc = PaintDocument.CreateBlank("t", 12, 12, transparent: true);
+        var layer = doc.ActiveLayer!;
+        layer.Pixels.FillRect(1, 1, 4, 4, 10, 20, 30, 255);
+        using var ws = new DocumentWorkspace(doc);
+        ws.Selection.Set(1, 1, 4, 4);
+
+        Assert.True(ws.BeginTransform());
+        ws.ActiveTransform!.TranslateX = 3;
+        ws.RefreshTransformPreview();
+        ws.CancelTransform();
+
+        Assert.False(ws.IsTransforming);
+        Assert.False(ws.IsSelectionTransform);
+        Assert.Equal(1, ws.Selection.X);
+        Assert.Equal(1, ws.Selection.Y);
+        Assert.Equal(4, ws.Selection.Width);
+        int i = layer.Pixels.Offset(1, 1);
+        Assert.Equal(10, layer.Pixels.PixelsReadOnly[i]);
+        Assert.Equal(20, layer.Pixels.PixelsReadOnly[i + 1]);
+        Assert.Equal(30, layer.Pixels.PixelsReadOnly[i + 2]);
+        Assert.Equal(255, layer.Pixels.PixelsReadOnly[i + 3]);
+    }
+
+    [Fact]
     public void ShiftScale_KeepsScaleProportion()
     {
         var buf = new PixelBuffer(20, 10);
