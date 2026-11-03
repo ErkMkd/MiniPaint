@@ -1,3 +1,4 @@
+using MiniPaint.Core.Composition;
 using MiniPaint.Core.Imaging;
 
 namespace MiniPaint.Core.Document;
@@ -54,6 +55,28 @@ public sealed class PaintDocument : IDisposable
         if (!transparent)
             layer.Pixels.Clear(255, 255, 255, 255);
         doc.AddLayer(layer);
+        return doc;
+    }
+
+    /// <summary>
+    /// New document sized to the layer's opaque pixel content (trimmed transparency).
+    /// Returns null if the layer is fully transparent.
+    /// </summary>
+    public static PaintDocument? CreateFromLayerContent(Layer sourceLayer, string? name = null)
+    {
+        ArgumentNullException.ThrowIfNull(sourceLayer);
+        var cropped = PixelOps.CropToOpaqueContent(sourceLayer.Pixels, out _, out _);
+        if (cropped is null) return null;
+
+        string docName = string.IsNullOrWhiteSpace(name) ? sourceLayer.Name : name.Trim();
+        var doc = new PaintDocument(docName, cropped.Width, cropped.Height);
+        doc.AddLayer(new Layer(sourceLayer.Name, cropped, 0, 0)
+        {
+            IsVisible = true,
+            Opacity = 1f,
+            BlendMode = BlendMode.Normal
+        });
+        doc.IsDirty = true;
         return doc;
     }
 

@@ -238,6 +238,28 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         _manager.NewDocument($"Untitled {_manager.Workspaces.Count + 1}", 800, 600);
     }
 
+    /// <summary>
+    /// Right-click layer → new document cropped to that layer's opaque content.
+    /// </summary>
+    [RelayCommand]
+    private void CreateImageFromLayer(LayerItemViewModel? item)
+    {
+        item ??= SelectedLayer;
+        if (item is null) return;
+
+        string name = item.Name;
+        var ws = _manager.NewDocumentFromLayerContent(item.Layer, name);
+        if (ws is null)
+        {
+            StatusText = "Layer has no visible content.";
+            AppLog.Info($"CreateImageFromLayer: empty layer '{name}'");
+            return;
+        }
+
+        AppLog.Info($"CreateImageFromLayer: '{name}' → {ws.Document.Width}x{ws.Document.Height}");
+        FitRequested?.Invoke();
+    }
+
     [RelayCommand]
     private async Task SaveProjectAsync()
     {

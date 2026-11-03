@@ -142,6 +142,28 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Right-click on a layer row selects it before the context menu opens.
+    /// </summary>
+    private void OnLayersContextRequested(object? sender, ContextRequestedEventArgs e)
+    {
+        if (Vm is null) return;
+
+        Control? current = e.Source as Control;
+        while (current is not null && current != sender)
+        {
+            if (current.DataContext is LayerItemViewModel item)
+            {
+                if (sender is ListBox list)
+                    list.SelectedItem = item;
+                Vm.SelectedLayer = item;
+                break;
+            }
+
+            current = current.Parent as Control;
+        }
+    }
+
     private void OnRenameKeyDown(object? sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter || Vm is null) return;

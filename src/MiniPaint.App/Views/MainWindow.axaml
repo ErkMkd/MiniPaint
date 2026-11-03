@@ -198,8 +198,17 @@
                      KeyDown="OnRenameKeyDown" />
           </StackPanel>
 
-          <ListBox ItemsSource="{Binding Layers}" SelectedItem="{Binding SelectedLayer}"
-                   Background="Transparent" Margin="4">
+          <ListBox x:Name="LayersList"
+                   ItemsSource="{Binding Layers}" SelectedItem="{Binding SelectedLayer}"
+                   Background="Transparent" Margin="4"
+                   ContextRequested="OnLayersContextRequested">
+            <ListBox.ContextMenu>
+              <ContextMenu>
+                <MenuItem Header="New Image from Layer Content"
+                          Command="{Binding CreateImageFromLayerCommand}"
+                          CommandParameter="{Binding SelectedLayer}" />
+              </ContextMenu>
+            </ListBox.ContextMenu>
             <ListBox.ItemTemplate>
               <DataTemplate x:DataType="vm:LayerItemViewModel">
                 <Grid ColumnDefinitions="Auto,*,Auto" Margin="2">

@@ -37,6 +37,25 @@ public sealed class WorkspaceManager : IDisposable
         return Add(new DocumentWorkspace(doc));
     }
 
+    /// <summary>
+    /// Open an existing in-memory document as a new workspace tab.
+    /// </summary>
+    public DocumentWorkspace OpenDocument(PaintDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return Add(new DocumentWorkspace(document));
+    }
+
+    /// <summary>
+    /// New tab from a layer's opaque content. Returns null if the layer is empty.
+    /// </summary>
+    public DocumentWorkspace? NewDocumentFromLayerContent(Layer layer, string? name = null)
+    {
+        ArgumentNullException.ThrowIfNull(layer);
+        var doc = PaintDocument.CreateFromLayerContent(layer, name);
+        return doc is null ? null : Add(new DocumentWorkspace(doc));
+    }
+
     public void Activate(DocumentWorkspace workspace)
     {
         if (!_workspaces.Contains(workspace))

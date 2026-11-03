@@ -162,6 +162,82 @@ public static class PixelOps
         BlendLayer(destLayer, source, offsetX, offsetY, 1f);
     }
 
+    /// <summary>
+    /// Axis-aligned bounds of pixels with alpha &gt; 0. Returns false if the buffer is fully transparent.
+    /// </summary>
+    public static bool TryGetOpaqueBounds(PixelBuffer buffer, out int x, out int y, out int width, out int height)
+    {
+        ArgumentNullException.ThrowIfNull(buffer);
+        x = y = width = height = 0;
+
+        var px = buffer.PixelsReadOnly;
+        int minX = buffer.Width;
+        int minY = buffer.Height;
+        int maxX = -1;
+        int maxY = -1;
+
+        for (int row = 0; row < buffer.Height; row++)
+        {
+            int rowOff = row * buffer.Width * 4;
+            for (int col = 0; col < buffer.Width; col++)
+            {
+                if (px[rowOff + col * 4 + 3] == 0) continue;
+                if (col < minX) minX = col;
+                if (col > maxX) maxX = col;
+                if (row < minY) minY = row;
+                if (row > maxY) maxY = row;
+            }
+        }
+
+        if (maxX < 0) return false;
+
+        x = minX;
+        y = minY;
+        width = maxX - minX + 1;
+        height = maxY - minY + 1;
+        return true;
+    }
+
+    /// <summary>
+    /// Copy a rectangular region of a buffer into a new buffer (layer-local coords).
+    /// </summary>
+    public static PixelBuffer Crop(PixelBuffer source, int x, int y, int width, int height)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentOutOfRangeException.ThrowIfNegative(x);
+        ArgumentOutOfRangeException.ThrowIfNegative(y);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+        if (x + width > source.Width || y + height > source.Height)
+            throw new ArgumentOutOfRangeException(nameof(width), "Crop rectangle exceeds source bounds.");
+
+        var result = new PixelBuffer(width, height);
+        var dst = result.Pixels;
+        var src = source.PixelsReadOnly;
+        for (int row = 0; row < height; row++)
+        {
+            int si = ((y + row) * source.Width + x) * 4;
+            int di = row * width * 4;
+            src.Slice(si, width * 4).CopyTo(dst.Slice(di, width * 4));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Crop to opaque content. Returns null if fully transparent.
+    /// <paramref name="originX"/>/<paramref name="originY"/> are the crop origin in the source buffer.
+    /// </summary>
+    public static PixelBuffer? CropToOpaqueContent(PixelBuffer source, out int originX, out int originY)
+    {
+        originX = originY = 0;
+        if (!TryGetOpaqueBounds(source, out int x, out int y, out int w, out int h))
+            return null;
+        originX = x;
+        originY = y;
+        return Crop(source, x, y, w, h);
+    }
+
     public static (int x, int y) ScreenToDocument(
         double screenX, double screenY,
         double panX, double panY,
