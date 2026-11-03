@@ -15,8 +15,8 @@ if exist "%PUB%" (
   echo [MiniPaint] Using Debug build. For taskbar pin, run publish.bat first.
 ) else (
   echo MiniPaint.exe not found.
-  echo   1^) Publish ^(pin-ready^):  publish.bat
-  echo   2^) Or Debug build:        dotnet build "%~dp0MiniPaint.slnx"
+  echo   1^) Debug build:   build-debug.bat
+  echo   2^) Publish:       publish.bat
   exit /b 1
 )
 
