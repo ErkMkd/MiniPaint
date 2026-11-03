@@ -2,17 +2,41 @@
 <#
 .SYNOPSIS
   Publishes MiniPaint (Release, self-contained win-x64) to publish\,
-  wiping any previous build first, bumps build-number.txt, then refreshes the pin shortcut.
+  bumps build-number.txt, refreshes the pin shortcut, then (by default)
+  commits/pushes the counter to GitHub and creates a Release with a zip asset.
 
-  Version scheme: 1.0.<build>  (build counter in repo-root build-number.txt)
+.PARAMETER SkipGit
+  Do not commit/push build-number.txt.
+
+.PARAMETER SkipRelease
+  Do not zip or create a GitHub Release (git push of the counter still runs unless -SkipGit).
 #>
+param(
+  [switch] $SkipGit,
+  [switch] $SkipRelease
+)
+
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent $PSScriptRoot
 $Project = Join-Path $Root "src\MiniPaint.App\MiniPaint.App.csproj"
 $OutDir = Join-Path $Root "publish"
+$DistDir = Join-Path $Root "dist"
 $Exe = Join-Path $OutDir "MiniPaint.exe"
 $BuildNumberFile = Join-Path $Root "build-number.txt"
+$Repo = "ErkMkd/MiniPaint"
+
+function Get-GitHubToken {
+  $fill = @"
+protocol=https
+host=github.com
+
+"@ | & git -c credential.helper= -c credential.helper=store credential fill 2>$null
+  if (-not $fill) { return $null }
+  $line = $fill | Where-Object { $_ -match '^password=' } | Select-Object -First 1
+  if (-not $line) { return $null }
+  return ($line -replace '^password=', '')
+}
 
 # --- bump build number ---
 $previous = 0
@@ -24,6 +48,7 @@ $build = $previous + 1
 Set-Content -LiteralPath $BuildNumberFile -Value "$build" -Encoding ascii -NoNewline
 $version = "1.0.$build"
 $fileVersion = "1.0.$build.0"
+$tag = "v$version"
 
 Write-Host ""
 Write-Host "MiniPaint - Release publish (self-contained win-x64)" -ForegroundColor Cyan
@@ -39,7 +64,6 @@ if (Test-Path $OutDir) {
     Remove-Item -LiteralPath $OutDir -Recurse -Force -ErrorAction Stop
   }
   catch {
-    # Roll back build number if we cannot clear the folder.
     Set-Content -LiteralPath $BuildNumberFile -Value "$previous" -Encoding ascii -NoNewline
     throw "Cannot clear '$OutDir'. Close MiniPaint.exe (and any Explorer window locking the folder), then retry. $($_.Exception.Message)"
   }
@@ -69,7 +93,6 @@ if (-not (Test-Path $Exe)) {
   throw "Expected published exe not found: $Exe"
 }
 
-# Human-readable stamp next to the exe (not required at runtime).
 @"
 MiniPaint $version
 Build $build
@@ -83,7 +106,95 @@ Write-Host "OK - previous build overwritten." -ForegroundColor Green
 Write-Host "  Version  : $version"
 Write-Host "  Exe      : $Exe"
 Write-Host "  Shortcut : $(Join-Path $Root 'MiniPaint.lnk')"
-Write-Host "  Counter  : $BuildNumberFile"
+
+# --- git commit + push build-number.txt ---
+$gitOk = $false
+if (-not $SkipGit) {
+  Write-Host ""
+  Write-Host "GitHub: commit + push build-number.txt ..." -ForegroundColor Cyan
+  Push-Location $Root
+  try {
+    & git add -- "build-number.txt"
+    $pending = & git status --porcelain -- "build-number.txt"
+    if ($pending) {
+      & git commit -m "Bump build to $build ($version)."
+      if ($LASTEXITCODE -ne 0) { throw "git commit failed" }
+    }
+    else {
+      Write-Host "  (build-number.txt already committed)"
+    }
+
+    & git -c credential.helper= -c credential.helper=store push -u origin main
+    if ($LASTEXITCODE -ne 0) { throw "git push failed" }
+    $gitOk = $true
+    Write-Host "  Pushed to origin/main" -ForegroundColor Green
+  }
+  catch {
+    Write-Host "  Git push skipped/failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "  Publish folder is still OK locally."
+  }
+  finally {
+    Pop-Location
+  }
+}
+else {
+  Write-Host "  Skipping git (-SkipGit)."
+}
+
+# --- zip + GitHub Release ---
+if (-not $SkipRelease) {
+  Write-Host ""
+  Write-Host "GitHub Release $tag ..." -ForegroundColor Cyan
+  try {
+    New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
+    $zipName = "MiniPaint-$tag-win-x64.zip"
+    $zipPath = Join-Path $DistDir $zipName
+    if (Test-Path $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+
+    Compress-Archive -Path (Join-Path $OutDir '*') -DestinationPath $zipPath -CompressionLevel Optimal
+    Write-Host "  Zip: $zipPath"
+
+    $token = Get-GitHubToken
+    if ($token) { $env:GH_TOKEN = $token }
+
+    $existing = & gh release view $tag --repo $Repo 2>$null
+    if ($LASTEXITCODE -eq 0) {
+      Write-Host "  Release $tag already exists - uploading asset..."
+      & gh release upload $tag $zipPath --repo $Repo --clobber
+      if ($LASTEXITCODE -ne 0) { throw "gh release upload failed" }
+    }
+    else {
+      $notes = @"
+## MiniPaint $tag
+
+Self-contained Windows x64 build $build - unzip and run MiniPaint.exe.
+
+Developpe par Cursor, orchestre par Eric Kernin.
+MIT License - Copyright (c) 2026 Eric Kernin / ErkMkd
+"@
+      $target = "main"
+      if ($gitOk) {
+        $target = (& git -C $Root rev-parse HEAD).Trim()
+      }
+      & gh release create $tag $zipPath `
+        --repo $Repo `
+        --title "MiniPaint $tag" `
+        --notes $notes `
+        --target $target
+      if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
+    }
+
+    Write-Host "  Release: https://github.com/$Repo/releases/tag/$tag" -ForegroundColor Green
+  }
+  catch {
+    Write-Host "  Release skipped/failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "  Local publish is still OK. You can retry with gh later."
+  }
+}
+else {
+  Write-Host "  Skipping GitHub Release (-SkipRelease)."
+}
+
 Write-Host ""
 Write-Host "Pin: right-click MiniPaint.lnk -> Pin to taskbar"
 Write-Host "  (or drag publish\MiniPaint.exe onto the taskbar)"

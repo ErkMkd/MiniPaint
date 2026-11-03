@@ -43,7 +43,15 @@ After each meaningful build you want on the taskbar:
 .\publish.bat
 ```
 
-That **deletes** `publish\`, increments `build-number.txt`, publishes as version `1.0.<n>`, and regenerates `MiniPaint.lnk` (AppUserModelID `ErkMkd.MiniPaint`, embedded icon). The version appears in **Help → About**. `MiniPaint.bat` launches the published exe when present, otherwise falls back to Debug.
+That **deletes** `publish\`, increments `build-number.txt`, publishes as version `1.0.<n>`, regenerates `MiniPaint.lnk`, then by default **commits/pushes** the counter to `main` and creates a **GitHub Release** (`v1.0.<n>` + zip under `dist\`).
+
+```powershell
+.\publish.bat                 # full: publish + push + Release
+.\publish.bat -SkipGit        # local publish only
+.\publish.bat -SkipRelease    # publish + push counter, no Release zip
+```
+
+The version appears in **Help → About**. `MiniPaint.bat` launches the published exe when present, otherwise falls back to Debug.
 
 ## Logs (crashes)
 
