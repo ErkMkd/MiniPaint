@@ -100,18 +100,23 @@
         <StackPanel Margin="4" Spacing="4">
           <Button ToolTip.Tip="Rectangular Selection (V) — drag inside moves selection; Ctrl+D to clear before new marquee"
                   Command="{Binding SetToolSelectCommand}"
+                  Background="{Binding CurrentTool, Converter={x:Static ctrl:ToolHighlightConverter.Instance}, ConverterParameter=RectSelect}"
                   HorizontalAlignment="Stretch" Height="40" Content="Sel" FontSize="12" />
           <Button ToolTip.Tip="Transform Selection (Ctrl+Alt+T) — resize selection handles"
                   Command="{Binding SetToolSelectionEditCommand}"
+                  Background="{Binding CurrentTool, Converter={x:Static ctrl:ToolHighlightConverter.Instance}, ConverterParameter=SelectionEdit}"
                   HorizontalAlignment="Stretch" Height="40" Content="Sel↔" FontSize="11" />
-          <Button ToolTip.Tip="Move Layer (M)"
+          <Button ToolTip.Tip="Move (M) — moves selection pixels when a selection exists; otherwise moves the layer"
                   Command="{Binding SetToolMoveCommand}"
+                  Background="{Binding CurrentTool, Converter={x:Static ctrl:ToolHighlightConverter.Instance}, ConverterParameter=MoveLayer}"
                   HorizontalAlignment="Stretch" Height="40" Content="Move" FontSize="12" />
           <Button ToolTip.Tip="Pan (H / Space+drag)"
                   Command="{Binding SetToolPanCommand}"
+                  Background="{Binding CurrentTool, Converter={x:Static ctrl:ToolHighlightConverter.Instance}, ConverterParameter=Pan}"
                   HorizontalAlignment="Stretch" Height="40" Content="Pan" FontSize="12" />
           <Button ToolTip.Tip="Free Transform (Ctrl+T)"
                   Command="{Binding ToggleFreeTransformCommand}"
+                  Background="{Binding CurrentTool, Converter={x:Static ctrl:ToolHighlightConverter.Instance}, ConverterParameter=FreeTransform}"
                   HorizontalAlignment="Stretch" Height="40" Content="Xform" FontSize="11" />
           <Separator Margin="0,8" />
           <Button ToolTip.Tip="Fit" Command="{Binding FitToWindowCommand}"

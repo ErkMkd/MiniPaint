@@ -7,6 +7,7 @@ using Avalonia.Threading;
 using MiniPaint.App.Logging;
 using MiniPaint.Core.Document;
 using MiniPaint.Core.History;
+using MiniPaint.Core.Imaging;
 using MiniPaint.Core.Selection;
 using MiniPaint.Core.Transform;
 
@@ -48,6 +49,12 @@ public sealed class ImageCanvas : Control
     private int _layerStartOx, _layerStartOy;
     private DispatcherTimer? _antsTimer;
     private double _antsPhase;
+
+    /// <summary>Lifted selection pixels dragged with the marquee (Move tool).</summary>
+    private PixelBuffer? _floatingPixels;
+    private PixelBuffer? _floatingBefore;
+    private WriteableBitmap? _floatingBitmap;
+    private Layer? _floatingLayer;
 
     private ScaleInteraction? _scaleIx;
     private RotateInteraction? _rotateIx;
@@ -162,6 +169,13 @@ public sealed class ImageCanvas : Control
                 e.Handled = true;
                 return;
             }
+        }
+
+        if (e.Key == Key.Escape && _floatingPixels is not null)
+        {
+            CancelFloatingSelection(ws);
+            e.Handled = true;
+            return;
         }
 
         if (e.Key == Key.Space)
@@ -287,13 +301,158 @@ public sealed class ImageCanvas : Control
 
         if (Tool == CanvasTool.MoveLayer && ws.Document.ActiveLayer is { } layer)
         {
+            var (docX, docY) = ws.ScreenToDocument(p.X, p.Y);
+
+            // Selection present → lift selected pixels and drag them with the marquee.
+            if (ws.Selection.HasSelection)
+            {
+                if (!BeginFloatingSelection(ws, layer, docX, docY))
+                {
+                    e.Handled = true;
+                    return;
+                }
+
+                e.Pointer.Capture(this);
+                e.Handled = true;
+                return;
+            }
+
             _movingLayer = true;
-            (_moveStartDocX, _moveStartDocY) = ws.ScreenToDocument(p.X, p.Y);
+            _moveStartDocX = docX;
+            _moveStartDocY = docY;
             _layerStartOx = layer.OffsetX;
             _layerStartOy = layer.OffsetY;
             e.Pointer.Capture(this);
             e.Handled = true;
         }
+    }
+
+    private bool BeginFloatingSelection(DocumentWorkspace ws, Layer layer, int docX, int docY)
+    {
+        if (_floatingPixels is not null)
+            return true; // already floating (shouldn't happen mid-gesture)
+
+        var before = layer.Pixels.Clone();
+        var lifted = SelectionOps.CutFromActiveLayer(ws.Document, ws.Selection);
+        if (lifted is null)
+        {
+            before.Dispose();
+            return false;
+        }
+
+        _floatingBefore = before;
+        _floatingPixels = lifted;
+        _floatingLayer = layer;
+        RebuildFloatingBitmap();
+        ws.InvalidateComposite();
+        _cacheVersion++;
+
+        _movingSelection = true;
+        _selMoveStartDocX = docX;
+        _selMoveStartDocY = docY;
+        _selMoveOriginX = ws.Selection.X;
+        _selMoveOriginY = ws.Selection.Y;
+        InvalidateVisual();
+        StatusChanged?.Invoke();
+        return true;
+    }
+
+    private void RebuildFloatingBitmap()
+    {
+        _floatingBitmap?.Dispose();
+        _floatingBitmap = null;
+        if (_floatingPixels is null) return;
+
+        var size = new PixelSize(_floatingPixels.Width, _floatingPixels.Height);
+        _floatingBitmap = new WriteableBitmap(size, new Vector(96, 96),
+            Avalonia.Platform.PixelFormat.Rgba8888, Avalonia.Platform.AlphaFormat.Unpremul);
+        using var fb = _floatingBitmap.Lock();
+        var src = _floatingPixels.PixelsReadOnly;
+        System.Runtime.InteropServices.Marshal.Copy(src.ToArray(), 0, fb.Address, src.Length);
+    }
+
+    private void CommitFloatingSelection(DocumentWorkspace ws)
+    {
+        if (_floatingPixels is null || _floatingLayer is null || _floatingBefore is null)
+        {
+            ClearFloatingState();
+            return;
+        }
+
+        bool moved = ws.Selection.HasSelection &&
+                     (ws.Selection.X != _selMoveOriginX || ws.Selection.Y != _selMoveOriginY);
+        bool discarded = !ws.Selection.HasSelection;
+
+        if (!moved && !discarded)
+        {
+            // Click without drag — restore exact pixels, no history entry.
+            _floatingLayer.ReplacePixels(_floatingBefore.Clone());
+            ClearFloatingState();
+            ws.InvalidateComposite();
+            _cacheVersion++;
+            ws.NotifyChanged();
+            return;
+        }
+
+        if (discarded)
+        {
+            // Marquee left the document entirely — keep the cut (pixels discarded).
+            var afterEmpty = _floatingLayer.Pixels.Clone();
+            ws.History.Record(new LayerPixelsCommand(
+                "Move Selection", _floatingLayer, _floatingBefore, afterEmpty, ws.NotifyChanged));
+            _floatingBefore = null; // owned by command
+            ClearFloatingState(disposeBefore: false);
+            ws.NotifyChanged();
+            return;
+        }
+
+        PixelOps.PasteOver(
+            _floatingLayer.Pixels,
+            _floatingLayer.OffsetX,
+            _floatingLayer.OffsetY,
+            _floatingPixels,
+            ws.Selection.X,
+            ws.Selection.Y);
+        ws.Document.IsDirty = true;
+
+        var after = _floatingLayer.Pixels.Clone();
+        ws.History.Record(new LayerPixelsCommand(
+            "Move Selection", _floatingLayer, _floatingBefore, after, ws.NotifyChanged));
+        _floatingBefore = null;
+        ClearFloatingState(disposeBefore: false);
+        ws.NotifyChanged();
+    }
+
+    private void CancelFloatingSelection(DocumentWorkspace? ws)
+    {
+        if (_floatingLayer is not null && _floatingBefore is not null)
+        {
+            _floatingLayer.ReplacePixels(_floatingBefore.Clone());
+            if (ws is not null)
+            {
+                ws.Selection.Set(_selMoveOriginX, _selMoveOriginY,
+                    _floatingPixels?.Width ?? ws.Selection.Width,
+                    _floatingPixels?.Height ?? ws.Selection.Height);
+                ws.NotifyChanged();
+            }
+        }
+
+        ClearFloatingState();
+        _movingSelection = false;
+        InvalidateVisual();
+        StatusChanged?.Invoke();
+    }
+
+    private void ClearFloatingState(bool disposeBefore = true)
+    {
+        _floatingPixels?.Dispose();
+        _floatingPixels = null;
+        if (disposeBefore)
+            _floatingBefore?.Dispose();
+        _floatingBefore = null;
+        _floatingBitmap?.Dispose();
+        _floatingBitmap = null;
+        _floatingLayer = null;
     }
 
     private void BeginSelectionEditInteraction(DocumentWorkspace ws, Point p, KeyModifiers mods)
@@ -519,6 +678,10 @@ public sealed class ImageCanvas : Control
                 ? new Cursor(StandardCursorType.SizeAll)
                 : Cursor.Default;
         }
+        else if (Tool == CanvasTool.MoveLayer)
+        {
+            Cursor = new Cursor(StandardCursorType.SizeAll);
+        }
     }
 
     private void UpdateSelectionEditCursor(SelectionEditSession edit, DocumentWorkspace ws, Point p)
@@ -552,6 +715,11 @@ public sealed class ImageCanvas : Control
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         var ws = Workspace;
+
+        // Commit floating pixels before clamping the marquee (clamp may clear an off-canvas sel).
+        if (_floatingPixels is not null && ws is not null)
+            CommitFloatingSelection(ws);
+
         if ((_selecting || _movingSelection || _selScaleIx is not null) && ws is not null)
         {
             ws.Selection.ClampToDocument(ws.Document.Width, ws.Document.Height);
@@ -616,12 +784,40 @@ public sealed class ImageCanvas : Control
             context.DrawImage(_bitmap, new Rect(0, 0, _bitmap.PixelSize.Width, _bitmap.PixelSize.Height), dest);
         }
 
+        if (_floatingBitmap is not null && _floatingPixels is not null && ws.Selection.HasSelection)
+            DrawFloatingSelection(context, ws);
+
         if (ws.IsTransforming && ws.ActiveTransform is { } session)
             DrawTransformOverlay(context, ws, session);
         else if (ws.IsEditingSelection && ws.ActiveSelectionEdit is { } edit)
             DrawSelectionEditOverlay(context, ws, edit);
         else if (ws.Selection.HasSelection)
             DrawMarchingAnts(context, ws);
+    }
+
+    private void DrawFloatingSelection(DrawingContext context, DocumentWorkspace ws)
+    {
+        if (_floatingBitmap is null || _floatingPixels is null) return;
+
+        var sel = ws.Selection;
+        var dest = new Rect(
+            ws.PanX + sel.X * ws.Zoom,
+            ws.PanY + sel.Y * ws.Zoom,
+            sel.Width * ws.Zoom,
+            sel.Height * ws.Zoom);
+        var renderOpts = new RenderOptions
+        {
+            BitmapInterpolationMode = ws.Zoom >= 4.0
+                ? BitmapInterpolationMode.None
+                : BitmapInterpolationMode.HighQuality
+        };
+        using (context.PushRenderOptions(renderOpts))
+        {
+            context.DrawImage(
+                _floatingBitmap,
+                new Rect(0, 0, _floatingBitmap.PixelSize.Width, _floatingBitmap.PixelSize.Height),
+                dest);
+        }
     }
 
     private void EnsureBitmap(DocumentWorkspace ws)
@@ -768,6 +964,7 @@ public sealed class ImageCanvas : Control
         _antsTimer?.Stop();
         _bitmap?.Dispose();
         _bitmap = null;
+        ClearFloatingState();
         base.OnDetachedFromVisualTree(e);
     }
 }
