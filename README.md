@@ -67,3 +67,7 @@ In the app: **Help → Open Log Folder**.
 - `src/MiniPaint.Core` — document model, composition, selection, clipboard, history, project I/O
 - `src/MiniPaint.App` — Avalonia dark editor UI
 - `tests/MiniPaint.Core.Tests` — pixel ops, alpha composition, coordinates, serialization
+
+## License
+
+MIT — Copyright (c) 2026 Éric Kernin / ErkMkd. See [LICENSE](LICENSE).
