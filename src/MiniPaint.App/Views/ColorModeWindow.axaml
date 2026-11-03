@@ -1,0 +1,63 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:MiniPaint.App.ViewModels"
+        x:Class="MiniPaint.App.Views.ColorModeWindow"
+        x:DataType="vm:ColorModeViewModel"
+        Width="460" Height="440"
+        MinWidth="420" MinHeight="400"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="#2D2D30"
+        Foreground="#DDDDDD"
+        Title="{Binding Title}">
+
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="OK" Width="88" IsDefault="True" Click="OnOkClick" />
+      <Button Content="Cancel" Width="88" IsCancel="True" Click="OnCancelClick" />
+    </StackPanel>
+
+    <StackPanel Spacing="12">
+      <TextBlock Text="{Binding Subtitle}" TextWrapping="Wrap" Foreground="#AAA" FontSize="12" />
+
+      <TextBlock Text="Mode" FontSize="12" Foreground="#CCC" />
+      <ComboBox ItemsSource="{Binding Modes}"
+                SelectedItem="{Binding SelectedMode}"
+                HorizontalAlignment="Stretch" />
+
+      <StackPanel Spacing="8" IsVisible="{Binding ShowIndexedCount}">
+        <TextBlock Text="Colors (2–256)" FontSize="12" Foreground="#CCC" />
+        <NumericUpDown Minimum="2" Maximum="256" Increment="1" FormatString="0"
+                       Value="{Binding ColorCountValue}" />
+      </StackPanel>
+
+      <StackPanel Spacing="8" IsVisible="{Binding ShowEcsCount}">
+        <TextBlock Text="Colors" FontSize="12" Foreground="#CCC" />
+        <ComboBox ItemsSource="{Binding EcsColorCounts}"
+                  SelectedItem="{Binding SelectedEcsCount}"
+                  HorizontalAlignment="Stretch" />
+        <TextBlock Text="64 colors uses Extra Half-Brite (32 palette + 32 half intensity)."
+                   IsVisible="{Binding ShowHalfBrightNote}"
+                   TextWrapping="Wrap" Foreground="#888" FontSize="11" />
+      </StackPanel>
+
+      <StackPanel Spacing="8" IsVisible="{Binding ShowAgaCount}">
+        <TextBlock Text="Colors" FontSize="12" Foreground="#CCC" />
+        <ComboBox ItemsSource="{Binding AgaColorCounts}"
+                  SelectedItem="{Binding SelectedAgaCount}"
+                  HorizontalAlignment="Stretch" />
+      </StackPanel>
+
+      <StackPanel Spacing="8" IsVisible="{Binding ShowQuantizer}">
+        <TextBlock Text="Quantizer" FontSize="12" Foreground="#CCC" />
+        <ComboBox ItemsSource="{Binding Quantizers}"
+                  SelectedItem="{Binding SelectedQuantizer}"
+                  HorizontalAlignment="Stretch" />
+        <TextBlock Text="Dithering" FontSize="12" Foreground="#CCC" Margin="0,4,0,0" />
+        <ComboBox ItemsSource="{Binding Dithers}"
+                  SelectedItem="{Binding SelectedDither}"
+                  HorizontalAlignment="Stretch" />
+      </StackPanel>
+    </StackPanel>
+  </DockPanel>
+</Window>
