@@ -93,11 +93,8 @@ if (-not (Test-Path $Exe)) {
   throw "Expected published exe not found: $Exe"
 }
 
-@"
-MiniPaint $version
-Build $build
-Published $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-"@ | Set-Content -LiteralPath (Join-Path $OutDir "VERSION.txt") -Encoding utf8
+$versionText = "MiniPaint $version`r`nBuild $build`r`nPublished $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`r`n"
+[System.IO.File]::WriteAllText((Join-Path $OutDir "VERSION.txt"), $versionText)
 
 & (Join-Path $PSScriptRoot "Create-PinShortcut.ps1")
 
@@ -157,14 +154,7 @@ if (-not $SkipRelease) {
     $token = Get-GitHubToken
     if ($token) { $env:GH_TOKEN = $token }
 
-    $existing = & gh release view $tag --repo $Repo 2>$null
-    if ($LASTEXITCODE -eq 0) {
-      Write-Host "  Release $tag already exists - uploading asset..."
-      & gh release upload $tag $zipPath --repo $Repo --clobber
-      if ($LASTEXITCODE -ne 0) { throw "gh release upload failed" }
-    }
-    else {
-      $notes = @"
+    $notes = @"
 ## MiniPaint $tag
 
 Self-contained Windows x64 build $build - unzip and run MiniPaint.exe.
@@ -172,16 +162,40 @@ Self-contained Windows x64 build $build - unzip and run MiniPaint.exe.
 Developpe par Cursor, orchestre par Eric Kernin.
 MIT License - Copyright (c) 2026 Eric Kernin / ErkMkd
 "@
-      $target = "main"
-      if ($gitOk) {
-        $target = (& git -C $Root rev-parse HEAD).Trim()
-      }
+    $target = "main"
+    if ($gitOk) {
+      $target = (& git -C $Root rev-parse HEAD).Trim()
+    }
+
+    # Do NOT use "gh release view" under $ErrorActionPreference=Stop:
+    # a missing release writes "release not found" to stderr and aborts before create.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
       & gh release create $tag $zipPath `
         --repo $Repo `
         --title "MiniPaint $tag" `
         --notes $notes `
-        --target $target
-      if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
+        --target $target 2>&1 | ForEach-Object { Write-Host "  $_" }
+      $createCode = $LASTEXITCODE
+    }
+    finally {
+      $ErrorActionPreference = $prevEap
+    }
+
+    if ($createCode -ne 0) {
+      Write-Host "  create returned $createCode - trying upload to existing tag..."
+      $ErrorActionPreference = "Continue"
+      try {
+        & gh release upload $tag $zipPath --repo $Repo --clobber 2>&1 | ForEach-Object { Write-Host "  $_" }
+        $uploadCode = $LASTEXITCODE
+      }
+      finally {
+        $ErrorActionPreference = $prevEap
+      }
+      if ($uploadCode -ne 0) {
+        throw "gh release create/upload failed (create=$createCode upload=$uploadCode)"
+      }
     }
 
     Write-Host "  Release: https://github.com/$Repo/releases/tag/$tag" -ForegroundColor Green
