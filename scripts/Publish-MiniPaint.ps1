@@ -121,10 +121,21 @@ if (-not $SkipGit) {
       Write-Host "  (build-number.txt already committed)"
     }
 
-    & git -c credential.helper= -c credential.helper=store push -u origin main
-    if ($LASTEXITCODE -ne 0) { throw "git push failed" }
+    # Push the commit we just made (current HEAD), even if we are on a feature branch.
+    # "git push origin main" only updates from local main and can be a no-op while HEAD is elsewhere.
+    $headSha = (& git rev-parse HEAD).Trim()
+    Write-Host "  Pushing $headSha -> origin/main ..."
+    & git -c credential.helper= -c credential.helper=store push origin "HEAD:main"
+    if ($LASTEXITCODE -ne 0) { throw "git push HEAD:main failed" }
+
+    & git fetch origin main --quiet
+    $remoteMain = (& git rev-parse origin/main).Trim()
+    if ($remoteMain -ne $headSha) {
+      throw "origin/main is $remoteMain after push; expected $headSha"
+    }
+
     $gitOk = $true
-    Write-Host "  Pushed to origin/main" -ForegroundColor Green
+    Write-Host "  Pushed to origin/main ($headSha)" -ForegroundColor Green
   }
   catch {
     Write-Host "  Git push skipped/failed: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -143,6 +154,10 @@ if (-not $SkipRelease) {
   Write-Host ""
   Write-Host "GitHub Release $tag ..." -ForegroundColor Cyan
   try {
+    if (-not $gitOk -and -not $SkipGit) {
+      throw "Skipping release: build commit was not pushed to origin/main (target would be invalid)."
+    }
+
     New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
     $zipName = "MiniPaint-$tag-win-x64.zip"
     $zipPath = Join-Path $DistDir $zipName
@@ -162,10 +177,9 @@ Self-contained Windows x64 build $build - unzip and run MiniPaint.exe.
 Developpe par Cursor, orchestre par Eric Kernin.
 MIT License - Copyright (c) 2026 Eric Kernin / ErkMkd
 "@
+    # Always target the default branch name. A local-only SHA makes GitHub return
+    # HTTP 422 Release.target_commitish is invalid.
     $target = "main"
-    if ($gitOk) {
-      $target = (& git -C $Root rev-parse HEAD).Trim()
-    }
 
     # Do NOT use "gh release view" under $ErrorActionPreference=Stop:
     # a missing release writes "release not found" to stderr and aborts before create.
