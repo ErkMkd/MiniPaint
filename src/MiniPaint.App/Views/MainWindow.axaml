@@ -131,12 +131,10 @@
                        TextTrimming="CharacterEllipsis" />
             <TextBlock Grid.Column="1" Text="Opacity" VerticalAlignment="Center"
                        Margin="12,0,6,0" FontSize="11" Foreground="#AAA" />
-            <Slider Grid.Column="2" Width="120" Minimum="0" Maximum="1"
+            <Slider x:Name="TransformOpacitySlider" Grid.Column="2" Width="120"
+                    Minimum="0" Maximum="1"
                     TickFrequency="0.01" IsSnapToTickEnabled="False"
-                    Value="{Binding TransformOpacity, Mode=TwoWay}"
-                    PointerPressed="OnTransformOpacityPointerPressed"
-                    ValueChanged="OnTransformOpacityValueChanged"
-                    PointerReleased="OnTransformOpacityPointerReleased" />
+                    Value="{Binding TransformOpacity, Mode=TwoWay}" />
             <TextBlock Grid.Column="3" Text="{Binding TransformOpacity, StringFormat={}{0:P0}}"
                        VerticalAlignment="Center" Margin="6,0,8,0" FontSize="11" Foreground="#CCC"
                        MinWidth="36" />
@@ -188,11 +186,9 @@
                       SelectedItem="{Binding SelectedBlendOption}"
                       SelectionChanged="OnBlendSelectionChanged" />
             <TextBlock Text="Opacity" FontSize="11" Foreground="#AAA" Margin="0,6,0,0" />
-            <Slider Minimum="0" Maximum="1" TickFrequency="0.01" IsSnapToTickEnabled="False"
-                    Value="{Binding SelectedLayer.Opacity, Mode=TwoWay}"
-                    PointerPressed="OnOpacityPointerPressed"
-                    ValueChanged="OnOpacityValueChanged"
-                    PointerReleased="OnOpacityPointerReleased" />
+            <Slider x:Name="LayerOpacitySlider"
+                    Minimum="0" Maximum="1" TickFrequency="0.01" IsSnapToTickEnabled="False"
+                    Value="{Binding SelectedLayer.Opacity, Mode=TwoWay}" />
             <TextBox PlaceholderText="Rename layer..." x:Name="RenameBox"
                      KeyDown="OnRenameKeyDown" />
           </StackPanel>

@@ -608,9 +608,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         item.Layer.Opacity = opacity;
         item.Opacity = opacity;
         TransformOpacity = opacity;
-        ws.Document.IsDirty = true;
-        ws.InvalidateComposite();
-        OnPropertyChanged(nameof(ActiveWorkspace));
+        // NotifyChanged (not InvalidateComposite alone) so ImageCanvas rebuilds the bitmap.
+        ws.NotifyChanged();
     }
 
     public void CommitLayerOpacity(LayerItemViewModel item, float from, float to)

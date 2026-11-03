@@ -13,6 +13,8 @@ public partial class MainWindow : Window
 {
     private float _opacityDragStart = 1f;
     private bool _opacityDragging;
+    private bool _opacityHandlersWired;
+    private bool _suppressOpacityEvents;
 
     public MainWindow()
     {
@@ -27,6 +29,7 @@ public partial class MainWindow : Window
         if (Vm is null) return;
         AppLog.Info($"MainWindow opened size={Bounds.Width}x{Bounds.Height}");
         Vm.AttachWindow(this);
+        WireOpacitySliders();
         Vm.FitRequested += () =>
         {
             if (Vm.ActiveWorkspace is { } ws)
@@ -47,6 +50,28 @@ public partial class MainWindow : Window
         // Start with a blank document so the app is immediately usable.
         if (Vm.Tabs.Count == 0)
             Vm.NewDocumentCommand.Execute(null);
+    }
+
+    /// <summary>
+    /// Slider thumb marks pointer events Handled — must use handledEventsToo or opacity never commits.
+    /// </summary>
+    private void WireOpacitySliders()
+    {
+        if (_opacityHandlersWired) return;
+        _opacityHandlersWired = true;
+
+        WireOpacitySlider(LayerOpacitySlider);
+        WireOpacitySlider(TransformOpacitySlider);
+    }
+
+    private void WireOpacitySlider(Slider? slider)
+    {
+        if (slider is null) return;
+
+        slider.AddHandler(PointerPressedEvent, OnOpacityPointerPressed, RoutingStrategies.Tunnel | RoutingStrategies.Bubble, handledEventsToo: true);
+        slider.AddHandler(PointerReleasedEvent, OnOpacityPointerReleased, RoutingStrategies.Tunnel | RoutingStrategies.Bubble, handledEventsToo: true);
+        slider.AddHandler(PointerCaptureLostEvent, OnOpacityPointerCaptureLost, RoutingStrategies.Bubble, handledEventsToo: true);
+        slider.ValueChanged += OnOpacityValueChanged;
     }
 
     private void OnWindowKeyDown(object? sender, KeyEventArgs e)
@@ -116,34 +141,42 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnOpacityPointerPressed(object? sender, PointerPressedEventArgs e) =>
-        BeginOpacityDrag(Vm?.SelectedLayer?.Opacity ?? 1f);
-
-    private void OnTransformOpacityPointerPressed(object? sender, PointerPressedEventArgs e) =>
-        BeginOpacityDrag(Vm?.TransformOpacity ?? Vm?.SelectedLayer?.Opacity ?? 1f);
+    private void OnOpacityPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        // Capture model opacity (not VM binding) so undo restores the real previous value.
+        var modelOpacity = Vm?.SelectedLayer?.Layer.Opacity ?? 1f;
+        BeginOpacityDrag(modelOpacity);
+    }
 
     private void OnOpacityValueChanged(object? sender, RangeBaseValueChangedEventArgs e)
     {
-        if (!_opacityDragging || Vm?.SelectedLayer is not { } layer) return;
-        Vm.PreviewLayerOpacity(layer, (float)e.NewValue);
-    }
+        if (_suppressOpacityEvents) return;
+        if (Vm?.SelectedLayer is not { } layer) return;
 
-    private void OnTransformOpacityValueChanged(object? sender, RangeBaseValueChangedEventArgs e)
-    {
-        if (!_opacityDragging || Vm?.SelectedLayer is not { } layer) return;
-        Vm.PreviewLayerOpacity(layer, (float)e.NewValue);
+        float value = (float)e.NewValue;
+        // Binding updates when switching layers should not start a phantom drag.
+        if (!_opacityDragging)
+        {
+            if (Math.Abs(value - layer.Layer.Opacity) < 0.0005f)
+                return;
+            BeginOpacityDrag(layer.Layer.Opacity);
+        }
+
+        Vm.PreviewLayerOpacity(layer, value);
     }
 
     private void OnOpacityPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
         if (sender is Slider slider)
             EndOpacityDrag((float)slider.Value);
+        else if (Vm is not null)
+            EndOpacityDrag(Vm.SelectedLayer?.Opacity ?? _opacityDragStart);
     }
 
-    private void OnTransformOpacityPointerReleased(object? sender, PointerReleasedEventArgs e)
+    private void OnOpacityPointerCaptureLost(object? sender, PointerCaptureLostEventArgs e)
     {
-        if (sender is Slider slider)
-            EndOpacityDrag((float)slider.Value);
+        if (!_opacityDragging || Vm?.SelectedLayer is not { } layer) return;
+        EndOpacityDrag(layer.Opacity);
     }
 
     private void BeginOpacityDrag(float start)
@@ -157,7 +190,15 @@ public partial class MainWindow : Window
         if (!_opacityDragging) return;
         _opacityDragging = false;
         if (Vm?.SelectedLayer is not { } layer) return;
-        Vm.CommitLayerOpacity(layer, _opacityDragStart, value);
+        _suppressOpacityEvents = true;
+        try
+        {
+            Vm.CommitLayerOpacity(layer, _opacityDragStart, value);
+        }
+        finally
+        {
+            _suppressOpacityEvents = false;
+        }
     }
 
     private void OnBlendSelectionChanged(object? sender, SelectionChangedEventArgs e)
