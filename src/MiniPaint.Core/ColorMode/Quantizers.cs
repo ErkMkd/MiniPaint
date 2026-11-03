@@ -143,8 +143,13 @@ public static class Quantizers
     }
 
     // --- Octree ---
+    // Previous version reduced one parent at a time and re-walked the whole tree each
+    // step (O(leaves²)) — that froze the UI on Preview. Now we batch-collapse the
+    // deepest internal level until we fit the budget.
     private static class Octree
     {
+        private const int MaxDepth = 6;
+
         private sealed class Node
         {
             public bool IsLeaf;
@@ -155,42 +160,118 @@ public static class Quantizers
 
         public static PaletteRgb[] Build(PixelBuffer source, int colorCount, int bits)
         {
+            var samples = PixelSampler.CollectOpaque(source, bits, maxSamples: 25000);
             var root = new Node();
             int leafCount = 0;
-            var samples = PixelSampler.CollectOpaque(source, bits, maxSamples: 80000);
             foreach (var (r, g, b) in samples)
-                Insert(root, r, g, b, 0, ref leafCount, colorCount);
+                Insert(root, r, g, b, 0, ref leafCount);
 
-            while (leafCount > colorCount)
-                Reduce(root, ref leafCount);
+            int guard = 64;
+            while (leafCount > colorCount && guard-- > 0)
+            {
+                int deepest = FindDeepestInternalDepth(root);
+                if (deepest < 0) break;
+                int before = leafCount;
+                CollapseDepth(root, 0, deepest, ref leafCount);
+                if (leafCount >= before) break; // no progress
+            }
 
-            var palette = new List<PaletteRgb>(colorCount);
-            Collect(root, palette);
-            return palette.ToArray();
+            var leaves = new List<(PaletteRgb color, int weight)>(Math.Max(16, leafCount));
+            CollectWeighted(root, leaves);
+            if (leaves.Count > colorCount)
+            {
+                leaves.Sort((a, b) => b.weight.CompareTo(a.weight));
+                leaves.RemoveRange(colorCount, leaves.Count - colorCount);
+            }
+
+            return leaves.Select(l => l.color).ToArray();
         }
 
-        private static void Insert(Node node, byte r, byte g, byte b, int depth, ref int leafCount, int maxColors)
+        private static void Insert(Node node, byte r, byte g, byte b, int depth, ref int leafCount)
         {
-            if (depth == 8 || node.IsLeaf)
+            if (depth >= MaxDepth)
             {
-                if (!node.IsLeaf && depth == 8)
+                if (!node.IsLeaf)
                 {
                     node.IsLeaf = true;
                     leafCount++;
                 }
                 node.PixelCount++;
-                node.R += r; node.G += g; node.B += b;
+                node.R += r;
+                node.G += g;
+                node.B += b;
                 return;
             }
 
             int idx = BitIndex(r, g, b, depth);
             node.Children[idx] ??= new Node();
-            Insert(node.Children[idx]!, r, g, b, depth + 1, ref leafCount, maxColors);
+            Insert(node.Children[idx]!, r, g, b, depth + 1, ref leafCount);
+        }
 
-            if (leafCount > maxColors * 2 && depth < 5)
+        private static int FindDeepestInternalDepth(Node node) =>
+            FindDeepestInternalDepth(node, 0);
+
+        private static int FindDeepestInternalDepth(Node node, int depth)
+        {
+            if (node.IsLeaf) return -1;
+            bool anyChild = false;
+            int best = -1;
+            for (int i = 0; i < 8; i++)
             {
-                // Opportunistic early reduce pressure
+                if (node.Children[i] is not { } c) continue;
+                anyChild = true;
+                int d = FindDeepestInternalDepth(c, depth + 1);
+                if (d > best) best = d;
             }
+            // An internal node at `depth` is itself a candidate if it has children.
+            return anyChild ? Math.Max(best, depth) : -1;
+        }
+
+        private static void CollapseDepth(Node node, int depth, int targetDepth, ref int leafCount)
+        {
+            if (node.IsLeaf) return;
+
+            if (depth == targetDepth)
+            {
+                int leavesRemoved = 0;
+                long r = 0, g = 0, b = 0;
+                int count = 0;
+                for (int i = 0; i < 8; i++)
+                {
+                    var child = node.Children[i];
+                    if (child is null) continue;
+                    leavesRemoved += CountLeaves(child);
+                    count += child.PixelCount;
+                    r += child.R;
+                    g += child.G;
+                    b += child.B;
+                    node.Children[i] = null;
+                }
+
+                node.PixelCount = count;
+                node.R = r;
+                node.G = g;
+                node.B = b;
+                node.IsLeaf = true;
+                leafCount = leafCount - leavesRemoved + 1;
+                return;
+            }
+
+            for (int i = 0; i < 8; i++)
+            {
+                if (node.Children[i] is { } c)
+                    CollapseDepth(c, depth + 1, targetDepth, ref leafCount);
+            }
+        }
+
+        private static int CountLeaves(Node n)
+        {
+            if (n.IsLeaf) return 1;
+            int c = 0;
+            for (int i = 0; i < 8; i++)
+                if (n.Children[i] is { } ch)
+                    c += CountLeaves(ch);
+            return c;
         }
 
         private static int BitIndex(byte r, byte g, byte b, int depth)
@@ -199,62 +280,22 @@ public static class Quantizers
             return ((r >> shift) & 1) << 2 | ((g >> shift) & 1) << 1 | ((b >> shift) & 1);
         }
 
-        private static void Reduce(Node node, ref int leafCount)
-        {
-            // Find deepest reducible parent
-            var reducible = new List<(Node node, int depth)>();
-            void Walk(Node n, int d)
-            {
-                if (n.IsLeaf) return;
-                bool hasChild = false;
-                for (int i = 0; i < 8; i++)
-                {
-                    if (n.Children[i] is null) continue;
-                    hasChild = true;
-                    Walk(n.Children[i]!, d + 1);
-                }
-                if (hasChild) reducible.Add((n, d));
-            }
-            Walk(node, 0);
-            if (reducible.Count == 0) return;
-            reducible.Sort((a, b) => b.depth.CompareTo(a.depth));
-            var target = reducible[0].node;
-            for (int i = 0; i < 8; i++)
-            {
-                var child = target.Children[i];
-                if (child is null) continue;
-                if (child.IsLeaf) leafCount--;
-                else ReduceChildrenLeaves(child, ref leafCount);
-                target.PixelCount += child.PixelCount;
-                target.R += child.R; target.G += child.G; target.B += child.B;
-                target.Children[i] = null;
-            }
-            target.IsLeaf = true;
-            leafCount++;
-        }
-
-        private static void ReduceChildrenLeaves(Node n, ref int leafCount)
-        {
-            if (n.IsLeaf) { leafCount--; return; }
-            for (int i = 0; i < 8; i++)
-                if (n.Children[i] is { } c)
-                    ReduceChildrenLeaves(c, ref leafCount);
-        }
-
-        private static void Collect(Node n, List<PaletteRgb> palette)
+        private static void CollectWeighted(Node n, List<(PaletteRgb color, int weight)> palette)
         {
             if (n.IsLeaf)
             {
                 if (n.PixelCount <= 0) return;
-                palette.Add(PaletteRgb.FromRgb(
-                    (int)(n.R / n.PixelCount),
-                    (int)(n.G / n.PixelCount),
-                    (int)(n.B / n.PixelCount)));
+                palette.Add((
+                    PaletteRgb.FromRgb(
+                        (int)(n.R / n.PixelCount),
+                        (int)(n.G / n.PixelCount),
+                        (int)(n.B / n.PixelCount)),
+                    n.PixelCount));
                 return;
             }
             for (int i = 0; i < 8; i++)
                 if (n.Children[i] is { } c)
-                    Collect(c, palette);
+                    CollectWeighted(c, palette);
         }
     }
 
