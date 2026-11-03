@@ -1,7 +1,8 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Publishes MiniPaint (Release, self-contained win-x64) to a stable folder and refreshes the pin shortcut.
+  Publishes MiniPaint (Release, self-contained win-x64) to publish\,
+  wiping any previous build first, then refreshes the pin shortcut.
 #>
 $ErrorActionPreference = "Stop"
 
@@ -10,9 +11,24 @@ $Project = Join-Path $Root "src\MiniPaint.App\MiniPaint.App.csproj"
 $OutDir = Join-Path $Root "publish"
 $Exe = Join-Path $OutDir "MiniPaint.exe"
 
-Write-Host "Publishing MiniPaint → $OutDir" -ForegroundColor Cyan
-Write-Host "  Configuration : Release"
-Write-Host "  Runtime       : win-x64 (self-contained)"
+Write-Host ""
+Write-Host "MiniPaint — Release publish (self-contained win-x64)" -ForegroundColor Cyan
+Write-Host "  Project : $Project"
+Write-Host "  Output  : $OutDir  (previous build will be deleted)"
+Write-Host ""
+
+# Wipe previous publish so leftover DLLs from older builds cannot linger.
+if (Test-Path $OutDir) {
+  Write-Host "Removing previous build: $OutDir" -ForegroundColor Yellow
+  try {
+    Remove-Item -LiteralPath $OutDir -Recurse -Force -ErrorAction Stop
+  }
+  catch {
+    throw "Cannot clear '$OutDir'. Close MiniPaint.exe (and any Explorer window locking the folder), then retry.`n$($_.Exception.Message)"
+  }
+}
+
+New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 
 dotnet publish $Project `
   -c Release `
@@ -33,9 +49,9 @@ if (-not (Test-Path $Exe)) {
 & (Join-Path $PSScriptRoot "Create-PinShortcut.ps1")
 
 Write-Host ""
-Write-Host "Ready to pin:" -ForegroundColor Green
+Write-Host "OK — previous build overwritten." -ForegroundColor Green
 Write-Host "  Exe      : $Exe"
 Write-Host "  Shortcut : $(Join-Path $Root 'MiniPaint.lnk')"
 Write-Host ""
-Write-Host "Pin: right-click MiniPaint.lnk → Pin to taskbar"
+Write-Host "Pin: right-click MiniPaint.lnk -> Pin to taskbar"
 Write-Host "  (or drag publish\MiniPaint.exe onto the taskbar)"
