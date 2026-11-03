@@ -43,7 +43,7 @@ After each meaningful build you want on the taskbar:
 .\publish.bat
 ```
 
-That refreshes `publish\` and regenerates `MiniPaint.lnk` (AppUserModelID `ErkMkd.MiniPaint`, embedded icon). `MiniPaint.bat` launches the published exe when present, otherwise falls back to Debug.
+That **deletes** `publish\`, increments `build-number.txt`, publishes as version `1.0.<n>`, and regenerates `MiniPaint.lnk` (AppUserModelID `ErkMkd.MiniPaint`, embedded icon). The version appears in **Help → About**. `MiniPaint.bat` launches the published exe when present, otherwise falls back to Debug.
 
 ## Logs (crashes)
 

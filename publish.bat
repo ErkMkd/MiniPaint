@@ -6,7 +6,8 @@ echo.
 echo ========================================
 echo  MiniPaint - Publish Release win-x64
 echo  Output: %~dp0publish\
-echo  (efface et remplace le build precedent)
+echo  (efface le build precedent + incremente
+echo   le numero dans build-number.txt)
 echo ========================================
 echo.
 
@@ -22,5 +23,11 @@ if not %ERR%==0 (
 )
 
 echo Termine. Exe: %~dp0publish\MiniPaint.exe
+if exist "%~dp0publish\VERSION.txt" (
+  echo.
+  type "%~dp0publish\VERSION.txt"
+)
+echo.
+echo Compteur: %~dp0build-number.txt
 pause
 exit /b 0
