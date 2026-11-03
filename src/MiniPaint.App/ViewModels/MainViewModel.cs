@@ -147,7 +147,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         if (ws.ActiveTransform is { } t)
         {
             TransformInfo =
-                $"W:{t.ScaleX * 100:0.#}% H:{t.ScaleY * 100:0.#}%  ∠ {t.RotationDegrees:0.#}°  —  Enter apply · Esc cancel · Shift constrain · Alt from center";
+                $"W:{t.ScaleX * 100:0.#}% H:{t.ScaleY * 100:0.#}%  ∠ {t.RotationDegrees:0.#}°  —  Enter apply · Esc cancel · Shift ratio · Alt = center (sinon ancre opposée)";
             StatusText = "Free Transform";
         }
         else

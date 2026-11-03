@@ -151,11 +151,10 @@ public sealed class FreeTransformSession : IDisposable
 
     /// <summary>
     /// Begin a scale interaction from a handle. Returns interaction state.
+    /// Photoshop: default anchor = opposite handle; Alt = layer center.
     /// </summary>
-    public ScaleInteraction BeginScale(TransformHandle handle, double docX, double docY, bool fromCenter)
-    {
-        return new ScaleInteraction(this, handle, docX, docY, fromCenter);
-    }
+    public ScaleInteraction BeginScale(TransformHandle handle) =>
+        new(this, handle);
 
     public RotateInteraction BeginRotate(double docX, double docY) =>
         new(this, docX, docY);
@@ -225,125 +224,163 @@ public sealed class ScaleInteraction
 {
     private readonly FreeTransformSession _session;
     private readonly TransformHandle _handle;
-    private readonly bool _fromCenter;
     private readonly double _startScaleX, _startScaleY;
     private readonly double _startTX, _startTY;
-    private readonly double _startDistX, _startDistY;
-    private readonly double _signX, _signY;
+    private readonly double _hw, _hh;
+    private readonly double _handleLocalX, _handleLocalY;
+    private readonly double _oppLocalX, _oppLocalY;
     private readonly bool _lockX, _lockY;
+    private readonly double _rotCos, _rotSin, _invCos, _invSin;
 
-    public ScaleInteraction(FreeTransformSession session, TransformHandle handle, double docX, double docY, bool fromCenter)
+    public ScaleInteraction(FreeTransformSession session, TransformHandle handle)
     {
         _session = session;
         _handle = handle;
-        _fromCenter = fromCenter;
         _startScaleX = session.ScaleX;
         _startScaleY = session.ScaleY;
         _startTX = session.TranslateX;
         _startTY = session.TranslateY;
+        _hw = session.BaseWidth / 2.0;
+        _hh = session.BaseHeight / 2.0;
 
-        double px = session.PivotX + session.TranslateX;
-        double py = session.PivotY + session.TranslateY;
-
-        // Vector from pivot to pointer in un-rotated space
-        double dx = docX - px;
-        double dy = docY - py;
-        double cos = Math.Cos(-session.RotationRadians);
-        double sin = Math.Sin(-session.RotationRadians);
-        _startDistX = dx * cos - dy * sin;
-        _startDistY = dx * sin + dy * cos;
+        (_handleLocalX, _handleLocalY) = HandleLocal(handle, _hw, _hh);
+        (_oppLocalX, _oppLocalY) = OppositeLocal(handle, _hw, _hh);
 
         _lockX = handle is TransformHandle.N or TransformHandle.S;
         _lockY = handle is TransformHandle.E or TransformHandle.W;
 
-        _signX = Math.Sign(_startDistX);
-        if (_signX == 0) _signX = 1;
-        _signY = Math.Sign(_startDistY);
-        if (_signY == 0) _signY = 1;
+        _rotCos = Math.Cos(session.RotationRadians);
+        _rotSin = Math.Sin(session.RotationRadians);
+        _invCos = Math.Cos(-session.RotationRadians);
+        _invSin = Math.Sin(-session.RotationRadians);
     }
 
-    public void Update(double docX, double docY, bool constrainProportions)
+    /// <param name="fromCenter">Alt: anchor at layer center; otherwise opposite handle (Photoshop default).</param>
+    public void Update(double docX, double docY, bool constrainProportions, bool fromCenter)
     {
-        double px = _session.PivotX + _startTX;
-        double py = _session.PivotY + _startTY;
-        // When not from-center, pivot for opposite-side scaling is the opposite edge — simplified: scale about center then compensate translate.
-        double dx = docX - (_session.PivotX + _session.TranslateX);
-        double dy = docY - (_session.PivotY + _session.TranslateY);
-        // Use fixed pivot at interaction start for stable math
-        dx = docX - px;
-        dy = docY - py;
+        // Anchor in unscaled local coords (relative to layer center).
+        double ax = fromCenter ? 0 : _oppLocalX;
+        double ay = fromCenter ? 0 : _oppLocalY;
 
-        double cos = Math.Cos(-_session.RotationRadians);
-        double sin = Math.Sin(-_session.RotationRadians);
-        double lx = dx * cos - dy * sin;
-        double ly = dx * sin + dy * cos;
+        // Document-space center and fixed anchor at drag start (using start scales/translate).
+        double centerX0 = _session.PivotX + _startTX;
+        double centerY0 = _session.PivotY + _startTY;
+        var (anchorDocX, anchorDocY) = LocalToDoc(centerX0, centerY0, ax * _startScaleX, ay * _startScaleY);
+
+        // Mouse relative to fixed anchor, in un-rotated local axes.
+        double vx = docX - anchorDocX;
+        double vy = docY - anchorDocY;
+        double vLocalX = vx * _invCos - vy * _invSin;
+        double vLocalY = vx * _invSin + vy * _invCos;
+
+        // Unscaled local delta from anchor → moving handle.
+        double spanX = _handleLocalX - ax;
+        double spanY = _handleLocalY - ay;
 
         double sx = _startScaleX;
         double sy = _startScaleY;
 
-        if (!_lockX && Math.Abs(_startDistX) > 1e-6)
-            sx = _startScaleX * (lx / _startDistX);
-        if (!_lockY && Math.Abs(_startDistY) > 1e-6)
-            sy = _startScaleY * (ly / _startDistY);
+        if (!_lockX && Math.Abs(spanX) > 1e-9)
+            sx = vLocalX / spanX;
+        if (!_lockY && Math.Abs(spanY) > 1e-9)
+            sy = vLocalY / spanY;
 
         if (_lockX) sx = _startScaleX;
         if (_lockY) sy = _startScaleY;
 
-        // Photoshop classic: Shift locks aspect ratio.
+        // Shift: lock aspect ratio of scales (Photoshop classic).
         if (constrainProportions)
         {
-            double fx = Math.Abs(_startDistX) < 1e-6 ? 1 : lx / _startDistX;
-            double fy = Math.Abs(_startDistY) < 1e-6 ? 1 : ly / _startDistY;
-            double f;
-            if (_lockX) f = fy;
-            else if (_lockY) f = fx;
-            else f = Math.Abs(fx) >= Math.Abs(fy) ? fx : fy;
-            sx = _startScaleX * f;
-            sy = _startScaleY * f;
+            double absX = Math.Abs(sx);
+            double absY = Math.Abs(sy);
+            double startRatio = Math.Abs(_startScaleY) < 1e-9
+                ? 1
+                : Math.Abs(_startScaleX / _startScaleY);
+
+            if (_lockX)
+            {
+                absX = absY * startRatio;
+            }
+            else if (_lockY)
+            {
+                absY = absX / startRatio;
+            }
+            else
+            {
+                // Pick dominant axis change vs start, apply uniform factor to both start scales.
+                double fx = Math.Abs(_startScaleX) < 1e-9 ? absX : absX / Math.Abs(_startScaleX);
+                double fy = Math.Abs(_startScaleY) < 1e-9 ? absY : absY / Math.Abs(_startScaleY);
+                double f = fx >= fy ? fx : fy;
+                absX = Math.Abs(_startScaleX) * f;
+                absY = Math.Abs(_startScaleY) * f;
+            }
+
+            sx = CopySign(absX, sx);
+            sy = CopySign(absY, sy);
         }
 
-        // Clamp extreme scales
-        sx = Math.Clamp(sx, -100, 100);
-        sy = Math.Clamp(sy, -100, 100);
-        if (Math.Abs(sx) < 0.001) sx = 0.001 * Math.Sign(sx == 0 ? 1 : sx);
-        if (Math.Abs(sy) < 0.001) sy = 0.001 * Math.Sign(sy == 0 ? 1 : sy);
+        sx = ClampScale(sx);
+        sy = ClampScale(sy);
 
         _session.ScaleX = sx;
         _session.ScaleY = sy;
 
-        if (!_fromCenter)
-        {
-            // Keep the opposite side fixed: shift translation so opposite handle stays put.
-            // Approximate by compensating half the size delta along handle axis in rotated space.
-            double dScaleX = sx - _startScaleX;
-            double dScaleY = sy - _startScaleY;
-            double hw = _session.BaseWidth / 2.0;
-            double hh = _session.BaseHeight / 2.0;
-
-            double localShiftX = 0, localShiftY = 0;
-            switch (_handle)
-            {
-                case TransformHandle.E: localShiftX = dScaleX * hw / 2; break;
-                case TransformHandle.W: localShiftX = -dScaleX * hw / 2; break;
-                case TransformHandle.S: localShiftY = dScaleY * hh / 2; break;
-                case TransformHandle.N: localShiftY = -dScaleY * hh / 2; break;
-                case TransformHandle.SE: localShiftX = dScaleX * hw / 2; localShiftY = dScaleY * hh / 2; break;
-                case TransformHandle.NE: localShiftX = dScaleX * hw / 2; localShiftY = -dScaleY * hh / 2; break;
-                case TransformHandle.SW: localShiftX = -dScaleX * hw / 2; localShiftY = dScaleY * hh / 2; break;
-                case TransformHandle.NW: localShiftX = -dScaleX * hw / 2; localShiftY = -dScaleY * hh / 2; break;
-            }
-
-            double rcos = Math.Cos(_session.RotationRadians);
-            double rsin = Math.Sin(_session.RotationRadians);
-            _session.TranslateX = _startTX + localShiftX * rcos - localShiftY * rsin;
-            _session.TranslateY = _startTY + localShiftX * rsin + localShiftY * rcos;
-        }
-        else
-        {
-            _session.TranslateX = _startTX;
-            _session.TranslateY = _startTY;
-        }
+        // Keep the anchor fixed in document space:
+        // Center1 + R*(sx*ax, sy*ay) = anchorDoc
+        double scaledAx = ax * sx;
+        double scaledAy = ay * sy;
+        double rotAx = scaledAx * _rotCos - scaledAy * _rotSin;
+        double rotAy = scaledAx * _rotSin + scaledAy * _rotCos;
+        double centerX1 = anchorDocX - rotAx;
+        double centerY1 = anchorDocY - rotAy;
+        _session.TranslateX = centerX1 - _session.PivotX;
+        _session.TranslateY = centerY1 - _session.PivotY;
     }
+
+    private (double x, double y) LocalToDoc(double centerX, double centerY, double localX, double localY)
+    {
+        double rx = localX * _rotCos - localY * _rotSin;
+        double ry = localX * _rotSin + localY * _rotCos;
+        return (centerX + rx, centerY + ry);
+    }
+
+    private static double ClampScale(double s)
+    {
+        s = Math.Clamp(s, -100, 100);
+        if (Math.Abs(s) < 0.001)
+            s = 0.001 * (s < 0 ? -1 : 1);
+        return s;
+    }
+
+    private static double CopySign(double magnitude, double signSource) =>
+        Math.Abs(magnitude) * (signSource < 0 ? -1 : 1);
+
+    private static (double x, double y) HandleLocal(TransformHandle handle, double hw, double hh) => handle switch
+    {
+        TransformHandle.NW => (-hw, -hh),
+        TransformHandle.N => (0, -hh),
+        TransformHandle.NE => (hw, -hh),
+        TransformHandle.E => (hw, 0),
+        TransformHandle.SE => (hw, hh),
+        TransformHandle.S => (0, hh),
+        TransformHandle.SW => (-hw, hh),
+        TransformHandle.W => (-hw, 0),
+        _ => (0, 0)
+    };
+
+    /// <summary>Photoshop default: opposite edge/corner stays put.</summary>
+    private static (double x, double y) OppositeLocal(TransformHandle handle, double hw, double hh) => handle switch
+    {
+        TransformHandle.NW => (hw, hh),   // SE
+        TransformHandle.N => (0, hh),     // S
+        TransformHandle.NE => (-hw, hh),  // SW
+        TransformHandle.E => (-hw, 0),    // W
+        TransformHandle.SE => (-hw, -hh), // NW
+        TransformHandle.S => (0, -hh),    // N
+        TransformHandle.SW => (hw, -hh),  // NE
+        TransformHandle.W => (hw, 0),     // E
+        _ => (0, 0)
+    };
 }
 
 public sealed class RotateInteraction

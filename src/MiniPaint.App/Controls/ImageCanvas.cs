@@ -248,9 +248,11 @@ public sealed class ImageCanvas : Control
         if (hit is not TransformHandle.None and not TransformHandle.Move)
         {
             _activeHandle = hit;
-            _scaleIx = session.BeginScale(hit, cdx, cdy, fromCenter: alt);
+            _scaleIx = session.BeginScale(hit);
             _rotateIx = null;
             _moveIx = null;
+            // Apply immediately so Alt state at press is respected from first move.
+            _scaleIx.Update(cdx, cdy, constrainProportions: mods.HasFlag(KeyModifiers.Shift), fromCenter: alt);
             return;
         }
 
@@ -332,8 +334,8 @@ public sealed class ImageCanvas : Control
 
             if (_scaleIx is not null)
             {
-                // Re-create with alt if needed mid-drag is awkward; alt is sampled at press.
-                _scaleIx.Update(cdx, cdy, constrainProportions: shift);
+                // Alt live (Photoshop): opposite handle by default, center while Alt is held.
+                _scaleIx.Update(cdx, cdy, constrainProportions: shift, fromCenter: alt);
             }
             else if (_rotateIx is not null)
             {
