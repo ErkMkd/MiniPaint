@@ -138,8 +138,18 @@ public static class ProjectSerializer
 
     public static void ExportPng(PaintDocument document, string path)
     {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
         using var composite = Composition.CompositionEngine.Composite(document);
         ImageCodec.SavePng(composite, path);
+    }
+
+    public static void ExportPng(PaintDocument document, Stream stream)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(stream);
+        using var composite = Composition.CompositionEngine.Composite(document);
+        ImageCodec.SavePng(composite, stream);
     }
 
     private static int IndexOf(PaintDocument document, Guid? id)

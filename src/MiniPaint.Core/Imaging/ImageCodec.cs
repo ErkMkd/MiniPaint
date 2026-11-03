@@ -29,24 +29,52 @@ public static class ImageCodec
         return new PixelBuffer(desired.Width, desired.Height, pixels);
     }
 
+    /// <summary>
+    /// Save via a sibling temp file then replace, with short retries — avoids hanging/failing
+    /// when the destination is briefly locked (Explorer, antivirus, Avalonia save picker).
+    /// </summary>
     public static void SavePng(PixelBuffer buffer, string path)
     {
-        using var stream = File.Create(path);
-        SavePng(buffer, stream);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var dir = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+
+        var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
+                SavePng(buffer, stream);
+
+            ReplaceWithRetry(temp, path);
+        }
+        finally
+        {
+            try { if (File.Exists(temp)) File.Delete(temp); } catch { /* ignore */ }
+        }
     }
 
     public static void SavePng(PixelBuffer buffer, Stream stream)
     {
+        ArgumentNullException.ThrowIfNull(buffer);
+        ArgumentNullException.ThrowIfNull(stream);
+
         var info = new SKImageInfo(buffer.Width, buffer.Height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
         using var bitmap = new SKBitmap(info);
-        var span = buffer.PixelsReadOnly;
-        System.Runtime.InteropServices.Marshal.Copy(
-            span.ToArray(), 0, bitmap.GetPixels(), span.Length);
+        var src = buffer.PixelsReadOnly;
+        unsafe
+        {
+            fixed (byte* p = src)
+            {
+                Buffer.MemoryCopy(p, (void*)bitmap.GetPixels(), src.Length, src.Length);
+            }
+        }
 
         using var image = SKImage.FromBitmap(bitmap);
         using var data = image.Encode(SKEncodedImageFormat.Png, 100)
             ?? throw new InvalidOperationException("PNG encode failed.");
         data.SaveTo(stream);
+        stream.Flush();
     }
 
     public static byte[] EncodePngBytes(PixelBuffer buffer)
@@ -70,8 +98,37 @@ public static class ImageCodec
         var info = new SKImageInfo(buffer.Width, buffer.Height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
         var bitmap = new SKBitmap(info);
         var src = buffer.PixelsReadOnly;
-        System.Runtime.InteropServices.Marshal.Copy(
-            src.ToArray(), 0, bitmap.GetPixels(), src.Length);
+        unsafe
+        {
+            fixed (byte* p = src)
+            {
+                Buffer.MemoryCopy(p, (void*)bitmap.GetPixels(), src.Length, src.Length);
+            }
+        }
         return bitmap;
+    }
+
+    private static void ReplaceWithRetry(string tempPath, string destinationPath)
+    {
+        const int attempts = 15;
+        for (int i = 0; i < attempts; i++)
+        {
+            try
+            {
+                File.Copy(tempPath, destinationPath, overwrite: true);
+                return;
+            }
+            catch (IOException) when (i < attempts - 1)
+            {
+                Thread.Sleep(40 * (i + 1));
+            }
+            catch (UnauthorizedAccessException) when (i < attempts - 1)
+            {
+                Thread.Sleep(40 * (i + 1));
+            }
+        }
+
+        // Last attempt — let the exception propagate with context.
+        File.Copy(tempPath, destinationPath, overwrite: true);
     }
 }

@@ -271,19 +271,70 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         var ws = ActiveWorkspace;
         if (ws is null || _window is null) return;
 
-        var file = await _window.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        IStorageFile? file = null;
+        try
         {
-            Title = "Export PNG",
-            DefaultExtension = "png",
-            SuggestedFileName = ws.Document.Name + ".png",
-            FileTypeChoices =
-            [
-                new FilePickerFileType("PNG") { Patterns = ["*.png"] }
-            ]
-        });
-        var path = file?.TryGetLocalPath();
-        if (path is null) return;
-        ws.ExportPng(path);
+            file = await _window.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "Export PNG",
+                DefaultExtension = "png",
+                SuggestedFileName = ws.Document.Name + ".png",
+                FileTypeChoices =
+                [
+                    new FilePickerFileType("PNG") { Patterns = ["*.png"] }
+                ]
+            });
+            if (file is null) return;
+
+            var path = file.TryGetLocalPath();
+            AppLog.Info($"Export PNG begin path={path ?? file.Name} doc={ws.Document.Width}x{ws.Document.Height}");
+            StatusText = "Exporting PNG…";
+
+            // Release the picker handle first — on Windows it often keeps an exclusive lock
+            // on the chosen path (especially when overwriting the file still "open" in the app).
+            try
+            {
+                if (file is IAsyncDisposable asyncDisp)
+                    await asyncDisp.DisposeAsync();
+                else if (file is IDisposable disp)
+                    disp.Dispose();
+            }
+            catch (Exception ex)
+            {
+                AppLog.Warn($"StorageFile dispose: {ex.Message}");
+            }
+            file = null;
+
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                AppLog.Error("Export PNG: no local path from save picker");
+                StatusText = "Export failed (no path)";
+                return;
+            }
+
+            // Encode off the UI thread so the window stays responsive.
+            await Task.Run(() => ws.ExportPng(path));
+
+            AppLog.Info($"Export PNG done: {path}");
+            StatusText = "Exported PNG";
+            UpdateStatus();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Export PNG failed", ex);
+            StatusText = "Export failed — see log";
+        }
+        finally
+        {
+            if (file is IAsyncDisposable asyncDisp)
+            {
+                try { await asyncDisp.DisposeAsync(); } catch { /* ignore */ }
+            }
+            else if (file is IDisposable disp)
+            {
+                try { disp.Dispose(); } catch { /* ignore */ }
+            }
+        }
     }
 
     [RelayCommand]
@@ -309,12 +360,14 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         {
             AppLog.Info($"{mode}: {ws.Document.Width}x{ws.Document.Height} → {vm.ResultWidth}x{vm.ResultHeight}" +
                         (mode == ResizeDialogMode.CanvasSize ? $" anchor={vm.Anchor}" : ""));
+            StatusText = mode == ResizeDialogMode.ImageSize ? "Resizing image…" : "Resizing canvas…";
 
-            DocumentResizeCommand cmd = mode == ResizeDialogMode.CanvasSize
+            // Heavy pixel work off the UI thread so the window does not appear frozen.
+            var cmd = await Task.Run(() => mode == ResizeDialogMode.CanvasSize
                 ? DocumentResizeCommand.CanvasSize(
                     ws.Document, vm.ResultWidth, vm.ResultHeight, vm.Anchor, ws.NotifyChanged)
                 : DocumentResizeCommand.ImageSize(
-                    ws.Document, vm.ResultWidth, vm.ResultHeight, ws.NotifyChanged);
+                    ws.Document, vm.ResultWidth, vm.ResultHeight, ws.NotifyChanged));
 
             // Factory already applied the mutation; record for undo without re-executing.
             ws.History.Record(cmd);
@@ -323,10 +376,12 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             ws.NotifyChanged();
             UpdateStatus();
             FitRequested?.Invoke();
+            AppLog.Info($"{mode} done");
         }
         catch (Exception ex)
         {
             AppLog.Error($"{mode} failed", ex);
+            StatusText = $"{mode} failed — see log";
         }
     }
 
