@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using MiniPaint.App.Controls;
 using MiniPaint.App.Logging;
+using MiniPaint.Core.Composition;
 using MiniPaint.Core.Document;
 using MiniPaint.Core.History;
 using MiniPaint.Core.Imaging;
@@ -31,6 +32,10 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     [ObservableProperty] public partial bool IsEditingSelection { get; set; }
     [ObservableProperty] public partial string TransformInfo { get; set; } = "";
     [ObservableProperty] public partial string SelectionEditInfo { get; set; } = "";
+    [ObservableProperty] public partial float TransformOpacity { get; set; } = 1f;
+    [ObservableProperty] public partial BlendModeOption? SelectedBlendOption { get; set; }
+
+    public BlendModeOption[] BlendModes { get; } = BlendModeNames.All;
 
     public DocumentWorkspace? ActiveWorkspace => SelectedTab?.Workspace;
 
@@ -76,10 +81,16 @@ public partial class MainViewModel : ViewModelBase, IDisposable
 
     partial void OnSelectedLayerChanged(LayerItemViewModel? value)
     {
-        if (value is null || ActiveWorkspace is null) return;
+        if (value is null || ActiveWorkspace is null)
+        {
+            SelectedBlendOption = null;
+            return;
+        }
         ActiveWorkspace.Document.ActiveLayerId = value.Id;
         foreach (var l in Layers)
             l.IsActive = l.Id == value.Id;
+        SelectedBlendOption = BlendModeNames.GetOption(value.BlendMode);
+        TransformOpacity = value.Opacity;
         ActiveWorkspace.InvalidateComposite();
         UpdateStatus();
     }
@@ -125,6 +136,10 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         }
 
         SelectedLayer = Layers.FirstOrDefault(l => l.IsActive) ?? Layers.FirstOrDefault();
+        SelectedBlendOption = SelectedLayer is null
+            ? null
+            : BlendModeNames.GetOption(SelectedLayer.BlendMode);
+        TransformOpacity = SelectedLayer?.Opacity ?? 1f;
     }
 
     public void UpdateStatus(int? cursorX = null, int? cursorY = null)
@@ -151,6 +166,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         IsEditingSelection = ws.IsEditingSelection;
         if (ws.ActiveTransform is { } t)
         {
+            TransformOpacity = ws.Document.ActiveLayer?.Opacity ?? SelectedLayer?.Opacity ?? 1f;
             TransformInfo =
                 $"W:{t.ScaleX * 100:0.#}% H:{t.ScaleY * 100:0.#}%  ∠ {t.RotationDegrees:0.#}°  —  Enter apply · Esc cancel · Shift ratio · Alt = center (sinon ancre opposée)";
             SelectionEditInfo = "";
@@ -531,12 +547,56 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     public event Action? FitRequested;
     public event Action? Zoom100Requested;
 
-    public void ApplyLayerOpacity(LayerItemViewModel item, float opacity)
+    public void PreviewLayerOpacity(LayerItemViewModel item, float opacity)
     {
         var ws = ActiveWorkspace;
         if (ws is null) return;
-        ws.History.Execute(LayerPropertyCommand.Opacity(item.Layer, opacity, ws.NotifyChanged));
+        opacity = Math.Clamp(opacity, 0f, 1f);
+        item.Layer.Opacity = opacity;
+        item.Opacity = opacity;
+        TransformOpacity = opacity;
+        ws.Document.IsDirty = true;
+        ws.InvalidateComposite();
+        OnPropertyChanged(nameof(ActiveWorkspace));
+    }
+
+    public void CommitLayerOpacity(LayerItemViewModel item, float from, float to)
+    {
+        var ws = ActiveWorkspace;
+        if (ws is null) return;
+        from = Math.Clamp(from, 0f, 1f);
+        to = Math.Clamp(to, 0f, 1f);
+        if (Math.Abs(from - to) < 0.0005f)
+        {
+            item.SyncFromModel();
+            return;
+        }
+
+        // History command captures before/after explicitly (preview may already have set layer).
+        item.Layer.Opacity = from;
+        ws.History.Execute(LayerPropertyCommand.Opacity(item.Layer, from, to, ws.NotifyChanged));
         item.SyncFromModel();
+        TransformOpacity = item.Opacity;
+    }
+
+    public void ApplyLayerOpacity(LayerItemViewModel item, float opacity)
+    {
+        CommitLayerOpacity(item, item.Layer.Opacity, opacity);
+    }
+
+    public void ApplyLayerBlendMode(LayerItemViewModel item, BlendMode blendMode)
+    {
+        var ws = ActiveWorkspace;
+        if (ws is null) return;
+        if (item.Layer.BlendMode == blendMode)
+        {
+            item.SyncFromModel();
+            return;
+        }
+
+        ws.History.Execute(LayerPropertyCommand.BlendModeChange(item.Layer, blendMode, ws.NotifyChanged));
+        item.SyncFromModel();
+        SelectedBlendOption = BlendModeNames.GetOption(item.BlendMode);
     }
 
     private static int IndexOf(PaintDocument doc, Guid id)

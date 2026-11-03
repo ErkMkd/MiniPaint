@@ -1,3 +1,4 @@
+using MiniPaint.Core.Composition;
 using MiniPaint.Core.Document;
 using MiniPaint.Core.Imaging;
 
@@ -42,6 +43,7 @@ public sealed class DeleteLayerCommand : IEditCommand
     private string _name = "";
     private bool _visible = true;
     private float _opacity = 1f;
+    private BlendMode _blendMode = BlendMode.Normal;
     private int _ox, _oy, _index;
     private readonly Action? _onChanged;
 
@@ -73,6 +75,7 @@ public sealed class DeleteLayerCommand : IEditCommand
         _name = layer.Name;
         _visible = layer.IsVisible;
         _opacity = layer.Opacity;
+        _blendMode = layer.BlendMode;
         _ox = layer.OffsetX;
         _oy = layer.OffsetY;
         _pixels?.Dispose();
@@ -87,7 +90,8 @@ public sealed class DeleteLayerCommand : IEditCommand
         var layer = new Layer(_name, _pixels.Clone(), _ox, _oy)
         {
             IsVisible = _visible,
-            Opacity = _opacity
+            Opacity = _opacity,
+            BlendMode = _blendMode
         };
         _document.AddLayer(layer, _index);
         _layerId = layer.Id;
@@ -136,6 +140,8 @@ public sealed class LayerPropertyCommand : IEditCommand
     private readonly bool _visAfter;
     private readonly float _opBefore;
     private readonly float _opAfter;
+    private readonly BlendMode _blendBefore;
+    private readonly BlendMode _blendAfter;
     private readonly int _oxBefore, _oyBefore, _oxAfter, _oyAfter;
     private readonly Action? _onChanged;
 
@@ -147,6 +153,7 @@ public sealed class LayerPropertyCommand : IEditCommand
         string nameBefore, string nameAfter,
         bool visBefore, bool visAfter,
         float opBefore, float opAfter,
+        BlendMode blendBefore, BlendMode blendAfter,
         int oxBefore, int oyBefore, int oxAfter, int oyAfter,
         Action? onChanged = null)
     {
@@ -158,6 +165,8 @@ public sealed class LayerPropertyCommand : IEditCommand
         _visAfter = visAfter;
         _opBefore = opBefore;
         _opAfter = opAfter;
+        _blendBefore = blendBefore;
+        _blendAfter = blendAfter;
         _oxBefore = oxBefore;
         _oyBefore = oyBefore;
         _oxAfter = oxAfter;
@@ -167,28 +176,41 @@ public sealed class LayerPropertyCommand : IEditCommand
 
     public static LayerPropertyCommand Rename(Layer layer, string newName, Action? onChanged = null) =>
         new("Rename Layer", layer, layer.Name, newName, layer.IsVisible, layer.IsVisible,
-            layer.Opacity, layer.Opacity, layer.OffsetX, layer.OffsetY, layer.OffsetX, layer.OffsetY, onChanged);
+            layer.Opacity, layer.Opacity, layer.BlendMode, layer.BlendMode,
+            layer.OffsetX, layer.OffsetY, layer.OffsetX, layer.OffsetY, onChanged);
 
     public static LayerPropertyCommand Visibility(Layer layer, bool visible, Action? onChanged = null) =>
         new("Layer Visibility", layer, layer.Name, layer.Name, layer.IsVisible, visible,
-            layer.Opacity, layer.Opacity, layer.OffsetX, layer.OffsetY, layer.OffsetX, layer.OffsetY, onChanged);
+            layer.Opacity, layer.Opacity, layer.BlendMode, layer.BlendMode,
+            layer.OffsetX, layer.OffsetY, layer.OffsetX, layer.OffsetY, onChanged);
 
     public static LayerPropertyCommand Opacity(Layer layer, float opacity, Action? onChanged = null) =>
+        Opacity(layer, layer.Opacity, opacity, onChanged);
+
+    public static LayerPropertyCommand Opacity(Layer layer, float from, float to, Action? onChanged = null) =>
         new("Layer Opacity", layer, layer.Name, layer.Name, layer.IsVisible, layer.IsVisible,
-            layer.Opacity, opacity, layer.OffsetX, layer.OffsetY, layer.OffsetX, layer.OffsetY, onChanged);
+            from, to, layer.BlendMode, layer.BlendMode,
+            layer.OffsetX, layer.OffsetY, layer.OffsetX, layer.OffsetY, onChanged);
+
+    public static LayerPropertyCommand BlendModeChange(Layer layer, BlendMode blendMode, Action? onChanged = null) =>
+        new("Layer Blend Mode", layer, layer.Name, layer.Name, layer.IsVisible, layer.IsVisible,
+            layer.Opacity, layer.Opacity, layer.BlendMode, blendMode,
+            layer.OffsetX, layer.OffsetY, layer.OffsetX, layer.OffsetY, onChanged);
 
     public static LayerPropertyCommand Move(Layer layer, int x, int y, Action? onChanged = null) =>
         new("Move Layer", layer, layer.Name, layer.Name, layer.IsVisible, layer.IsVisible,
-            layer.Opacity, layer.Opacity, layer.OffsetX, layer.OffsetY, x, y, onChanged);
+            layer.Opacity, layer.Opacity, layer.BlendMode, layer.BlendMode,
+            layer.OffsetX, layer.OffsetY, x, y, onChanged);
 
-    public void Execute() => Apply(_nameAfter, _visAfter, _opAfter, _oxAfter, _oyAfter);
-    public void Undo() => Apply(_nameBefore, _visBefore, _opBefore, _oxBefore, _oyBefore);
+    public void Execute() => Apply(_nameAfter, _visAfter, _opAfter, _blendAfter, _oxAfter, _oyAfter);
+    public void Undo() => Apply(_nameBefore, _visBefore, _opBefore, _blendBefore, _oxBefore, _oyBefore);
 
-    private void Apply(string name, bool vis, float op, int ox, int oy)
+    private void Apply(string name, bool vis, float op, BlendMode blend, int ox, int oy)
     {
         _layer.Name = name;
         _layer.IsVisible = vis;
         _layer.Opacity = op;
+        _layer.BlendMode = blend;
         _layer.OffsetX = ox;
         _layer.OffsetY = oy;
         _onChanged?.Invoke();

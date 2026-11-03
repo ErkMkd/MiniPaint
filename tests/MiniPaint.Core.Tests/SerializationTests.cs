@@ -17,11 +17,17 @@ public class SerializationTests
             var doc = PaintDocument.CreateBlank("RoundTrip", 16, 12, transparent: true);
             doc.Layers[0].Pixels.FillRect(0, 0, 8, 8, 255, 0, 0, 200);
             doc.Layers[0].Opacity = 0.75f;
+            doc.Layers[0].BlendMode = MiniPaint.Core.Composition.BlendMode.Multiply;
             doc.SetLayerOffset(doc.Layers[0].Id, 1, 2);
 
             var overlay = new PixelBuffer(4, 4);
             overlay.FillRect(0, 0, 4, 4, 0, 255, 0, 255);
-            var layer2 = new Layer("Overlay", overlay, 5, 5) { IsVisible = false };
+            var layer2 = new Layer("Overlay", overlay, 5, 5)
+            {
+                IsVisible = false,
+                BlendMode = MiniPaint.Core.Composition.BlendMode.Screen,
+                Opacity = 0.4f
+            };
             doc.AddLayer(layer2);
 
             ProjectSerializer.Save(doc, path);
@@ -32,10 +38,13 @@ public class SerializationTests
             Assert.Equal(12, loaded.Height);
             Assert.Equal(2, loaded.Layers.Count);
             Assert.Equal(0.75f, loaded.Layers[0].Opacity, 3);
+            Assert.Equal(MiniPaint.Core.Composition.BlendMode.Multiply, loaded.Layers[0].BlendMode);
             Assert.Equal(1, loaded.Layers[0].OffsetX);
             Assert.Equal(2, loaded.Layers[0].OffsetY);
             Assert.False(loaded.Layers[1].IsVisible);
             Assert.Equal("Overlay", loaded.Layers[1].Name);
+            Assert.Equal(MiniPaint.Core.Composition.BlendMode.Screen, loaded.Layers[1].BlendMode);
+            Assert.Equal(0.4f, loaded.Layers[1].Opacity, 3);
 
             var px = loaded.Layers[0].Pixels.PixelsReadOnly;
             Assert.Equal(255, px[0]);

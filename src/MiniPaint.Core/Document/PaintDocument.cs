@@ -145,6 +145,13 @@ public sealed class PaintDocument : IDisposable
         IsDirty = true;
     }
 
+    public void SetLayerBlendMode(Guid layerId, Composition.BlendMode blendMode)
+    {
+        var layer = RequireLayer(layerId);
+        layer.BlendMode = blendMode;
+        IsDirty = true;
+    }
+
     public void SetLayerOffset(Guid layerId, int x, int y)
     {
         var layer = RequireLayer(layerId);

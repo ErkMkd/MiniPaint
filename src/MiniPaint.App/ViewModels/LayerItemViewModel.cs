@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using MiniPaint.Core.Composition;
 using MiniPaint.Core.Document;
 
 namespace MiniPaint.App.ViewModels;
@@ -10,7 +11,10 @@ public partial class LayerItemViewModel : ViewModelBase
     [ObservableProperty] public partial string Name { get; set; }
     [ObservableProperty] public partial bool IsVisible { get; set; }
     [ObservableProperty] public partial float Opacity { get; set; }
+    [ObservableProperty] public partial BlendMode BlendMode { get; set; }
     [ObservableProperty] public partial bool IsActive { get; set; }
+
+    public string BlendModeLabel => BlendModeNames.ToLabel(BlendMode);
 
     public Guid Id => Layer.Id;
 
@@ -20,6 +24,7 @@ public partial class LayerItemViewModel : ViewModelBase
         Name = layer.Name;
         IsVisible = layer.IsVisible;
         Opacity = layer.Opacity;
+        BlendMode = layer.BlendMode;
         IsActive = isActive;
     }
 
@@ -28,5 +33,9 @@ public partial class LayerItemViewModel : ViewModelBase
         Name = Layer.Name;
         IsVisible = Layer.IsVisible;
         Opacity = Layer.Opacity;
+        BlendMode = Layer.BlendMode;
+        OnPropertyChanged(nameof(BlendModeLabel));
     }
+
+    partial void OnBlendModeChanged(BlendMode value) => OnPropertyChanged(nameof(BlendModeLabel));
 }

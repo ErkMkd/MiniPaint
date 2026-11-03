@@ -120,12 +120,28 @@
       <DockPanel Grid.Column="1">
         <Border DockPanel.Dock="Top" Background="#2D2D30" Padding="8,4"
                 IsVisible="{Binding IsTransforming}">
-          <Grid ColumnDefinitions="*,Auto,Auto">
+          <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto,Auto,Auto">
             <TextBlock Text="{Binding TransformInfo}" VerticalAlignment="Center"
-                       FontSize="12" Foreground="#EEE" TextWrapping="NoWrap" />
-            <Button Grid.Column="1" Content="Apply" Margin="8,0" Padding="10,2"
+                       FontSize="12" Foreground="#EEE" TextWrapping="NoWrap"
+                       TextTrimming="CharacterEllipsis" />
+            <TextBlock Grid.Column="1" Text="Opacity" VerticalAlignment="Center"
+                       Margin="12,0,6,0" FontSize="11" Foreground="#AAA" />
+            <Slider Grid.Column="2" Width="120" Minimum="0" Maximum="1"
+                    TickFrequency="0.01" IsSnapToTickEnabled="False"
+                    Value="{Binding TransformOpacity, Mode=TwoWay}"
+                    PointerPressed="OnTransformOpacityPointerPressed"
+                    ValueChanged="OnTransformOpacityValueChanged"
+                    PointerReleased="OnTransformOpacityPointerReleased" />
+            <TextBlock Grid.Column="3" Text="{Binding TransformOpacity, StringFormat={}{0:P0}}"
+                       VerticalAlignment="Center" Margin="6,0,8,0" FontSize="11" Foreground="#CCC"
+                       MinWidth="36" />
+            <ComboBox Grid.Column="4" Width="140" Margin="0,0,8,0"
+                      ItemsSource="{Binding BlendModes}"
+                      SelectedItem="{Binding SelectedBlendOption}"
+                      SelectionChanged="OnBlendSelectionChanged" />
+            <Button Grid.Column="5" Content="Apply" Margin="4,0" Padding="10,2"
                     Command="{Binding CommitTransformCommand}" />
-            <Button Grid.Column="2" Content="Cancel" Padding="10,2"
+            <Button Grid.Column="6" Content="Cancel" Padding="10,2"
                     Command="{Binding CancelTransformCommand}" />
           </Grid>
         </Border>
@@ -161,9 +177,16 @@
           </StackPanel>
 
           <StackPanel DockPanel.Dock="Bottom" Margin="8" Spacing="4">
-            <TextBlock Text="Opacity" FontSize="11" Foreground="#AAA" />
+            <TextBlock Text="Blend mode" FontSize="11" Foreground="#AAA" />
+            <ComboBox HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding BlendModes}"
+                      SelectedItem="{Binding SelectedBlendOption}"
+                      SelectionChanged="OnBlendSelectionChanged" />
+            <TextBlock Text="Opacity" FontSize="11" Foreground="#AAA" Margin="0,6,0,0" />
             <Slider Minimum="0" Maximum="1" TickFrequency="0.01" IsSnapToTickEnabled="False"
                     Value="{Binding SelectedLayer.Opacity, Mode=TwoWay}"
+                    PointerPressed="OnOpacityPointerPressed"
+                    ValueChanged="OnOpacityValueChanged"
                     PointerReleased="OnOpacityPointerReleased" />
             <TextBox PlaceholderText="Rename layer..." x:Name="RenameBox"
                      KeyDown="OnRenameKeyDown" />
@@ -177,7 +200,10 @@
                   <CheckBox IsChecked="{Binding IsVisible}"
                             Click="OnVisibilityClick"
                             Tag="{Binding}" />
-                  <TextBlock Grid.Column="1" Text="{Binding Name}" VerticalAlignment="Center" Margin="6,0" />
+                  <StackPanel Grid.Column="1" Margin="6,0" Spacing="0">
+                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding BlendModeLabel}" Foreground="#777" FontSize="10" />
+                  </StackPanel>
                   <TextBlock Grid.Column="2" Text="{Binding Opacity, StringFormat={}{0:P0}}"
                              Foreground="#888" FontSize="11" VerticalAlignment="Center" />
                 </Grid>

@@ -1,3 +1,4 @@
+using MiniPaint.Core.Composition;
 using MiniPaint.Core.Imaging;
 
 namespace MiniPaint.Core.Document;
@@ -10,6 +11,7 @@ public sealed class Layer : IDisposable
     public string Name { get; set; }
     public bool IsVisible { get; set; } = true;
     public float Opacity { get; set; } = 1f;
+    public BlendMode BlendMode { get; set; } = BlendMode.Normal;
 
     /// <summary>Offset of the layer bitmap origin in document coordinates.</summary>
     public int OffsetX { get; set; }
@@ -37,7 +39,8 @@ public sealed class Layer : IDisposable
         return new Layer(newName ?? Name + " copy", Pixels.Clone(), OffsetX, OffsetY)
         {
             IsVisible = IsVisible,
-            Opacity = Opacity
+            Opacity = Opacity,
+            BlendMode = BlendMode
         };
     }
 

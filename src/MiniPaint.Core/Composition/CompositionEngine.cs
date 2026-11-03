@@ -4,7 +4,7 @@ using MiniPaint.Core.Imaging;
 namespace MiniPaint.Core.Composition;
 
 /// <summary>
-/// Composites visible layers (bottom → top) with correct alpha into a document-sized buffer.
+/// Composites visible layers (bottom → top) with opacity + blend modes into a document-sized buffer.
 /// </summary>
 public static class CompositionEngine
 {
@@ -12,21 +12,10 @@ public static class CompositionEngine
     {
         ArgumentNullException.ThrowIfNull(document);
         var result = new PixelBuffer(document.Width, document.Height);
-        // Transparent canvas by default.
-        foreach (var layer in document.Layers)
-        {
-            if (!layer.IsVisible || layer.Opacity <= 0f)
-                continue;
-
-            PixelOps.BlendLayer(result, layer.Pixels, layer.OffsetX, layer.OffsetY, layer.Opacity);
-        }
-
+        CompositeInto(document, result);
         return result;
     }
 
-    /// <summary>
-    /// Composite into an existing buffer (cleared first). Avoids allocating when callers reuse a cache.
-    /// </summary>
     public static void CompositeInto(PaintDocument document, PixelBuffer destination)
     {
         ArgumentNullException.ThrowIfNull(document);
@@ -40,7 +29,13 @@ public static class CompositionEngine
             if (!layer.IsVisible || layer.Opacity <= 0f)
                 continue;
 
-            PixelOps.BlendLayer(destination, layer.Pixels, layer.OffsetX, layer.OffsetY, layer.Opacity);
+            PixelOps.BlendLayer(
+                destination,
+                layer.Pixels,
+                layer.OffsetX,
+                layer.OffsetY,
+                layer.Opacity,
+                layer.BlendMode);
         }
     }
 }

@@ -1,3 +1,5 @@
+using MiniPaint.Core.Composition;
+
 namespace MiniPaint.Core.Imaging;
 
 /// <summary>
@@ -12,53 +14,24 @@ public static class PixelOps
         byte srcR, byte srcG, byte srcB, byte srcA,
         ref byte dstR, ref byte dstG, ref byte dstB, ref byte dstA)
     {
-        if (srcA == 0) return;
-        if (srcA == 255 || dstA == 0)
-        {
-            dstR = srcR;
-            dstG = srcG;
-            dstB = srcB;
-            dstA = srcA;
-            return;
-        }
-
-        // outA = srcA + dstA * (1 - srcA)
-        int invSrcA = 255 - srcA;
-        int outA = srcA + (dstA * invSrcA + 127) / 255;
-        if (outA == 0)
-        {
-            dstR = dstG = dstB = dstA = 0;
-            return;
-        }
-
-        // Unpremultiply result after blending premultiplied channels.
-        int outR = (srcR * srcA + dstR * dstA * invSrcA / 255 + 127) / 255;
-        int outG = (srcG * srcA + dstG * dstA * invSrcA / 255 + 127) / 255;
-        int outB = (srcB * srcA + dstB * dstA * invSrcA / 255 + 127) / 255;
-
-        dstR = (byte)Math.Clamp((outR * 255 + outA / 2) / outA, 0, 255);
-        dstG = (byte)Math.Clamp((outG * 255 + outA / 2) / outA, 0, 255);
-        dstB = (byte)Math.Clamp((outB * 255 + outA / 2) / outA, 0, 255);
-        dstA = (byte)Math.Clamp(outA, 0, 255);
+        BlendOps.BlendPixel(BlendMode.Normal, srcR, srcG, srcB, srcA, ref dstR, ref dstG, ref dstB, ref dstA, 1f);
     }
 
     /// <summary>
-    /// Blend src onto dst with uniform opacity multiplier (0..1) for the source layer.
+    /// Blend src onto dst with opacity and blend mode for the source layer.
     /// </summary>
     public static void BlendLayer(
         PixelBuffer dst,
         PixelBuffer src,
         int offsetX,
         int offsetY,
-        float opacity)
+        float opacity,
+        BlendMode blendMode = BlendMode.Normal)
     {
         ArgumentNullException.ThrowIfNull(dst);
         ArgumentNullException.ThrowIfNull(src);
         opacity = Math.Clamp(opacity, 0f, 1f);
         if (opacity <= 0f) return;
-
-        int opacityByte = (int)Math.Round(opacity * 255f);
-        if (opacityByte <= 0) return;
 
         var dstPx = dst.Pixels;
         var srcPx = src.PixelsReadOnly;
@@ -80,9 +53,6 @@ public static class PixelOps
                 byte sa = srcPx[si + 3];
                 if (sa == 0) continue;
 
-                int a = (sa * opacityByte + 127) / 255;
-                if (a == 0) continue;
-
                 byte sr = srcPx[si];
                 byte sg = srcPx[si + 1];
                 byte sb = srcPx[si + 2];
@@ -92,7 +62,7 @@ public static class PixelOps
                 byte db = dstPx[di + 2];
                 byte da = dstPx[di + 3];
 
-                BlendOver(sr, sg, sb, (byte)a, ref dr, ref dg, ref db, ref da);
+                BlendOps.BlendPixel(blendMode, sr, sg, sb, sa, ref dr, ref dg, ref db, ref da, opacity);
 
                 dstPx[di] = dr;
                 dstPx[di + 1] = dg;

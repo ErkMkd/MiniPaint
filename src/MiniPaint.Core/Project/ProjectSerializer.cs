@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MiniPaint.Core.Composition;
 using MiniPaint.Core.Document;
 using MiniPaint.Core.Imaging;
 
@@ -8,7 +9,7 @@ namespace MiniPaint.Core.Project;
 
 /// <summary>
 /// Native .minipaint format: ZIP containing manifest.json + layer_N.png files.
-/// Preserves layers, offsets, opacity, visibility, and document dimensions.
+/// Preserves layers, offsets, opacity, blend mode, visibility, and document dimensions.
 /// </summary>
 public static class ProjectSerializer
 {
@@ -49,6 +50,7 @@ public static class ProjectSerializer
                     Name = l.Name,
                     Visible = l.IsVisible,
                     Opacity = l.Opacity,
+                    BlendMode = l.BlendMode.ToString(),
                     OffsetX = l.OffsetX,
                     OffsetY = l.OffsetY,
                     File = $"layers/layer_{i:D3}.png"
@@ -112,10 +114,12 @@ public static class ProjectSerializer
             stream.CopyTo(ms);
             ms.Position = 0;
             var pixels = ImageCodec.Load(ms);
+            BlendModeNames.TryParse(layerInfo.BlendMode, out var blendMode);
             var layer = new Layer(layerInfo.Name, pixels, layerInfo.OffsetX, layerInfo.OffsetY)
             {
                 IsVisible = layerInfo.Visible,
-                Opacity = layerInfo.Opacity
+                Opacity = layerInfo.Opacity,
+                BlendMode = blendMode
             };
             doc.AddLayer(layer);
         }
@@ -161,6 +165,7 @@ public static class ProjectSerializer
         public string Name { get; set; } = "";
         public bool Visible { get; set; } = true;
         public float Opacity { get; set; } = 1f;
+        public string? BlendMode { get; set; }
         public int OffsetX { get; set; }
         public int OffsetY { get; set; }
         public string File { get; set; } = "";

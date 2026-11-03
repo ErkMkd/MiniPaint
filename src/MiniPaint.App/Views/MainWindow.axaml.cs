@@ -1,14 +1,19 @@
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using MiniPaint.App.Controls;
 using MiniPaint.App.Logging;
 using MiniPaint.App.ViewModels;
+using MiniPaint.Core.Composition;
 
 namespace MiniPaint.App.Views;
 
 public partial class MainWindow : Window
 {
+    private float _opacityDragStart = 1f;
+    private bool _opacityDragging;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -109,10 +114,55 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnOpacityPointerPressed(object? sender, PointerPressedEventArgs e) =>
+        BeginOpacityDrag(Vm?.SelectedLayer?.Opacity ?? 1f);
+
+    private void OnTransformOpacityPointerPressed(object? sender, PointerPressedEventArgs e) =>
+        BeginOpacityDrag(Vm?.TransformOpacity ?? Vm?.SelectedLayer?.Opacity ?? 1f);
+
+    private void OnOpacityValueChanged(object? sender, RangeBaseValueChangedEventArgs e)
+    {
+        if (!_opacityDragging || Vm?.SelectedLayer is not { } layer) return;
+        Vm.PreviewLayerOpacity(layer, (float)e.NewValue);
+    }
+
+    private void OnTransformOpacityValueChanged(object? sender, RangeBaseValueChangedEventArgs e)
+    {
+        if (!_opacityDragging || Vm?.SelectedLayer is not { } layer) return;
+        Vm.PreviewLayerOpacity(layer, (float)e.NewValue);
+    }
+
     private void OnOpacityPointerReleased(object? sender, PointerReleasedEventArgs e)
     {
-        if (Vm?.SelectedLayer is not { } layer) return;
         if (sender is Slider slider)
-            Vm.ApplyLayerOpacity(layer, (float)slider.Value);
+            EndOpacityDrag((float)slider.Value);
+    }
+
+    private void OnTransformOpacityPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        if (sender is Slider slider)
+            EndOpacityDrag((float)slider.Value);
+    }
+
+    private void BeginOpacityDrag(float start)
+    {
+        _opacityDragStart = start;
+        _opacityDragging = true;
+    }
+
+    private void EndOpacityDrag(float value)
+    {
+        if (!_opacityDragging) return;
+        _opacityDragging = false;
+        if (Vm?.SelectedLayer is not { } layer) return;
+        Vm.CommitLayerOpacity(layer, _opacityDragStart, value);
+    }
+
+    private void OnBlendSelectionChanged(object? sender, SelectionChangedEventArgs e)
+    {
+        if (Vm?.SelectedLayer is not { } layer) return;
+        if (sender is not ComboBox { SelectedItem: BlendModeOption option }) return;
+        if (layer.Layer.BlendMode == option.Mode) return;
+        Vm.ApplyLayerBlendMode(layer, option.Mode);
     }
 }
