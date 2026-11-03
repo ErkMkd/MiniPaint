@@ -1,4 +1,5 @@
 using MiniPaint.Core.Clipboard;
+using MiniPaint.Core.ColorMode;
 using MiniPaint.Core.Composition;
 using MiniPaint.Core.History;
 using MiniPaint.Core.Imaging;
@@ -67,6 +68,8 @@ public sealed class DocumentWorkspace : IDisposable
         if (_compositeDirty)
         {
             CompositionEngine.CompositeInto(Document, _compositeCache);
+            if (Document.ColorSettings.Mode != ColorModeKind.Rgba)
+                ColorModePipeline.ApplyInPlace(_compositeCache, Document.ColorSettings);
             _compositeDirty = false;
         }
 

@@ -1,3 +1,4 @@
+using MiniPaint.Core.ColorMode;
 using MiniPaint.Core.Composition;
 using MiniPaint.Core.Imaging;
 
@@ -19,6 +20,9 @@ public sealed class PaintDocument : IDisposable
     public string? ProjectPath { get; set; }
     public bool IsDirty { get; set; }
     public Guid? ActiveLayerId { get; set; }
+
+    /// <summary>Live color-mode constraint (RGBA / Indexed / ECS / AGA). Layers stay full RGBA.</summary>
+    public DocumentColorSettings ColorSettings { get; } = new();
 
     public IReadOnlyList<Layer> Layers => _layers;
 

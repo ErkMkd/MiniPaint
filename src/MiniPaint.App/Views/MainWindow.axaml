@@ -27,6 +27,7 @@
         <Separator />
         <MenuItem Header="_Save Project..." Command="{Binding SaveProjectCommand}" InputGesture="Ctrl+S" />
         <MenuItem Header="_Export PNG..." Command="{Binding ExportPngCommand}" InputGesture="Ctrl+Shift+E" />
+        <MenuItem Header="Export IFF-_ILBM..." Command="{Binding ExportIlbmCommand}" />
         <Separator />
         <MenuItem Header="_Close" Command="{Binding CloseDocumentCommand}" InputGesture="Ctrl+W" />
       </MenuItem>
@@ -47,6 +48,7 @@
         <MenuItem Header="Cancel Transform" Command="{Binding CancelTransformCommand}" InputGesture="Escape" />
       </MenuItem>
       <MenuItem Header="_Image">
+        <MenuItem Header="_Mode..." Command="{Binding ImageModeCommand}" InputGesture="Ctrl+Shift+M" />
         <MenuItem Header="_Image Size..." Command="{Binding ImageSizeCommand}" InputGesture="Ctrl+Alt+I" />
         <MenuItem Header="_Canvas Size..." Command="{Binding CanvasSizeCommand}" InputGesture="Ctrl+Alt+C" />
       </MenuItem>

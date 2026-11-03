@@ -5,6 +5,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using MiniPaint.App.Controls;
 using MiniPaint.App.Logging;
+using MiniPaint.Core.ColorMode;
 using MiniPaint.Core.Composition;
 using MiniPaint.Core.Document;
 using MiniPaint.Core.History;
@@ -167,7 +168,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             return;
         }
 
-        SizeText = $"{ws.Document.Width} × {ws.Document.Height}";
+        SizeText = $"{ws.Document.Width} × {ws.Document.Height} · {FormatColorMode(ws.Document.ColorSettings)}";
         ZoomText = $"{ws.Zoom * 100:0.#}%";
         if (cursorX is int cx && cursorY is int cy)
             CursorText = $"{cx}, {cy}";
@@ -207,7 +208,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             AllowMultiple = true,
             FileTypeFilter =
             [
-                new FilePickerFileType("Images") { Patterns = ["*.png", "*.jpg", "*.jpeg"] },
+                new FilePickerFileType("Images") { Patterns = ["*.png", "*.jpg", "*.jpeg", "*.iff", "*.ilbm", "*.lbm"] },
+                new FilePickerFileType("IFF ILBM") { Patterns = ["*.iff", "*.ilbm", "*.lbm"] },
                 new FilePickerFileType("MiniPaint Project") { Patterns = ["*.minipaint"] },
                 new FilePickerFileType("All") { Patterns = ["*.*"] }
             ]
@@ -356,6 +358,87 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             {
                 try { disp.Dispose(); } catch { /* ignore */ }
             }
+        }
+    }
+
+    [RelayCommand]
+    private async Task ImageModeAsync()
+    {
+        var ws = ActiveWorkspace;
+        if (ws is null || _window is null) return;
+
+        if (ws.IsTransforming) ws.CancelTransform();
+        if (ws.IsEditingSelection) ws.CancelSelectionEdit();
+
+        var before = ws.Document.ColorSettings.Clone();
+        var vm = new ColorModeViewModel(before);
+        var dlg = new Views.ColorModeWindow(vm);
+        var ok = await dlg.ShowDialog<bool?>(_window);
+        if (ok != true) return;
+
+        var after = vm.ToSettings();
+        if (before.Equals(after)) return;
+
+        try
+        {
+            StatusText = "Applying image mode…";
+            // Quantizer work runs on next composite; apply settings via history.
+            var cmd = new ColorSettingsCommand(ws.Document, before, after, ws.NotifyChanged);
+            ws.History.Execute(cmd);
+            UpdateStatus();
+            AppLog.Info($"Image mode → {after.Mode} colors={after.ColorCount} q={after.Quantizer} dither={after.Dither}");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Image mode failed", ex);
+            StatusText = "Image mode failed — see log";
+        }
+    }
+
+    [RelayCommand]
+    private async Task ExportIlbmAsync()
+    {
+        var ws = ActiveWorkspace;
+        if (ws is null || _window is null) return;
+
+        if (!IlbmCodec.CanExport(ws.Document))
+        {
+            StatusText = "IFF-ILBM export needs Indexed / ECS / AGA mode (Image → Mode…).";
+            return;
+        }
+
+        try
+        {
+            var file = await _window.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "Export IFF-ILBM",
+                DefaultExtension = "iff",
+                SuggestedFileName = ws.Document.Name + ".iff",
+                FileTypeChoices =
+                [
+                    new FilePickerFileType("IFF ILBM") { Patterns = ["*.iff", "*.ilbm"] }
+                ]
+            });
+            if (file is null) return;
+            var path = file.TryGetLocalPath();
+            try
+            {
+                if (file is IAsyncDisposable asyncDisp) await asyncDisp.DisposeAsync();
+                else if (file is IDisposable disp) disp.Dispose();
+            }
+            catch { /* ignore */ }
+
+            if (string.IsNullOrWhiteSpace(path)) return;
+
+            StatusText = "Exporting IFF-ILBM…";
+            await Task.Run(() => IlbmCodec.Save(ws.Document, path));
+            StatusText = "Exported IFF-ILBM";
+            AppLog.Info($"Export ILBM done: {path}");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Export ILBM failed", ex);
+            StatusText = "IFF export failed — see log";
         }
     }
 
@@ -733,6 +816,19 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         for (int i = 0; i < doc.Layers.Count; i++)
             if (doc.Layers[i].Id == id) return i;
         return -1;
+    }
+
+    private static string FormatColorMode(DocumentColorSettings s)
+    {
+        s.Sanitize();
+        return s.Mode switch
+        {
+            ColorModeKind.Rgba => "RGBA",
+            ColorModeKind.Indexed => $"Indexed {s.ColorCount}",
+            ColorModeKind.Ecs => s.HalfBright ? "ECS 64 EHB" : $"ECS {s.ColorCount}",
+            ColorModeKind.Aga => $"AGA {s.ColorCount}",
+            _ => s.Mode.ToString()
+        };
     }
 
     public void Dispose()

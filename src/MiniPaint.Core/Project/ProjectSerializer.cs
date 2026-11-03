@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MiniPaint.Core.ColorMode;
 using MiniPaint.Core.Composition;
 using MiniPaint.Core.Document;
 using MiniPaint.Core.Imaging;
@@ -38,6 +39,8 @@ public static class ProjectSerializer
         using (var fs = File.Create(temp))
         using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
         {
+            var cs = document.ColorSettings;
+            cs.Sanitize();
             var manifest = new ProjectManifest
             {
                 Version = FormatVersion,
@@ -45,6 +48,11 @@ public static class ProjectSerializer
                 Width = document.Width,
                 Height = document.Height,
                 ActiveLayerIndex = IndexOf(document, document.ActiveLayerId),
+                ColorMode = cs.Mode.ToString(),
+                ColorCount = cs.ColorCount,
+                HalfBright = cs.HalfBright,
+                Quantizer = cs.Quantizer.ToString(),
+                Dither = cs.Dither.ToString(),
                 Layers = document.Layers.Select((l, i) => new LayerManifest
                 {
                     Name = l.Name,
@@ -132,6 +140,17 @@ public static class ProjectSerializer
         else
             doc.ActiveLayerId = doc.Layers[^1].Id;
 
+        if (Enum.TryParse<ColorModeKind>(manifest.ColorMode, ignoreCase: true, out var mode))
+            doc.ColorSettings.Mode = mode;
+        if (manifest.ColorCount is int cc)
+            doc.ColorSettings.ColorCount = cc;
+        doc.ColorSettings.HalfBright = manifest.HalfBright ?? false;
+        if (Enum.TryParse<QuantizerKind>(manifest.Quantizer, ignoreCase: true, out var q))
+            doc.ColorSettings.Quantizer = q;
+        if (Enum.TryParse<DitherKind>(manifest.Dither, ignoreCase: true, out var d))
+            doc.ColorSettings.Dither = d;
+        doc.ColorSettings.Sanitize();
+
         doc.IsDirty = false;
         return doc;
     }
@@ -141,6 +160,8 @@ public static class ProjectSerializer
         ArgumentNullException.ThrowIfNull(document);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         using var composite = Composition.CompositionEngine.Composite(document);
+        if (document.ColorSettings.Mode != ColorModeKind.Rgba)
+            ColorModePipeline.ApplyInPlace(composite, document.ColorSettings);
         ImageCodec.SavePng(composite, path);
     }
 
@@ -149,6 +170,8 @@ public static class ProjectSerializer
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(stream);
         using var composite = Composition.CompositionEngine.Composite(document);
+        if (document.ColorSettings.Mode != ColorModeKind.Rgba)
+            ColorModePipeline.ApplyInPlace(composite, document.ColorSettings);
         ImageCodec.SavePng(composite, stream);
     }
 
@@ -167,6 +190,11 @@ public static class ProjectSerializer
         public int Width { get; set; }
         public int Height { get; set; }
         public int ActiveLayerIndex { get; set; }
+        public string? ColorMode { get; set; }
+        public int? ColorCount { get; set; }
+        public bool? HalfBright { get; set; }
+        public string? Quantizer { get; set; }
+        public string? Dither { get; set; }
         public List<LayerManifest> Layers { get; set; } = new();
     }
 

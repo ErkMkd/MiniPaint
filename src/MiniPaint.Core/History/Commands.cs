@@ -1,8 +1,46 @@
+using MiniPaint.Core.ColorMode;
 using MiniPaint.Core.Composition;
 using MiniPaint.Core.Document;
 using MiniPaint.Core.Imaging;
 
 namespace MiniPaint.Core.History;
+
+public sealed class ColorSettingsCommand : IEditCommand
+{
+    private readonly PaintDocument _document;
+    private readonly DocumentColorSettings _before;
+    private readonly DocumentColorSettings _after;
+    private readonly Action? _onChanged;
+
+    public string Name => "Image Mode";
+
+    public ColorSettingsCommand(
+        PaintDocument document,
+        DocumentColorSettings before,
+        DocumentColorSettings after,
+        Action? onChanged = null)
+    {
+        _document = document ?? throw new ArgumentNullException(nameof(document));
+        _before = before.Clone();
+        _after = after.Clone();
+        _after.Sanitize();
+        _onChanged = onChanged;
+    }
+
+    public void Execute()
+    {
+        _document.ColorSettings.CopyFrom(_after);
+        _document.IsDirty = true;
+        _onChanged?.Invoke();
+    }
+
+    public void Undo()
+    {
+        _document.ColorSettings.CopyFrom(_before);
+        _document.IsDirty = true;
+        _onChanged?.Invoke();
+    }
+}
 
 public sealed class LayerPixelsCommand : IEditCommand
 {

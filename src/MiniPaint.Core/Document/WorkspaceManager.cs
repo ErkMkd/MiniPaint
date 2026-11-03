@@ -1,4 +1,5 @@
 using MiniPaint.Core.Clipboard;
+using MiniPaint.Core.Imaging;
 using MiniPaint.Core.Project;
 
 namespace MiniPaint.Core.Document;
@@ -21,7 +22,14 @@ public sealed class WorkspaceManager : IDisposable
 
     public DocumentWorkspace OpenImage(string path)
     {
-        var doc = PaintDocument.FromImage(path);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        PaintDocument doc;
+        if (path.EndsWith(".iff", StringComparison.OrdinalIgnoreCase) ||
+            path.EndsWith(".ilbm", StringComparison.OrdinalIgnoreCase) ||
+            path.EndsWith(".lbm", StringComparison.OrdinalIgnoreCase))
+            doc = IlbmCodec.LoadDocument(path);
+        else
+            doc = PaintDocument.FromImage(path);
         return Add(new DocumentWorkspace(doc));
     }
 
