@@ -12,7 +12,7 @@ $OutDir = Join-Path $Root "publish"
 $Exe = Join-Path $OutDir "MiniPaint.exe"
 
 Write-Host ""
-Write-Host "MiniPaint — Release publish (self-contained win-x64)" -ForegroundColor Cyan
+Write-Host "MiniPaint - Release publish (self-contained win-x64)" -ForegroundColor Cyan
 Write-Host "  Project : $Project"
 Write-Host "  Output  : $OutDir  (previous build will be deleted)"
 Write-Host ""
@@ -24,7 +24,7 @@ if (Test-Path $OutDir) {
     Remove-Item -LiteralPath $OutDir -Recurse -Force -ErrorAction Stop
   }
   catch {
-    throw "Cannot clear '$OutDir'. Close MiniPaint.exe (and any Explorer window locking the folder), then retry.`n$($_.Exception.Message)"
+    throw "Cannot clear '$OutDir'. Close MiniPaint.exe (and any Explorer window locking the folder), then retry. $($_.Exception.Message)"
   }
 }
 
@@ -49,7 +49,7 @@ if (-not (Test-Path $Exe)) {
 & (Join-Path $PSScriptRoot "Create-PinShortcut.ps1")
 
 Write-Host ""
-Write-Host "OK — previous build overwritten." -ForegroundColor Green
+Write-Host "OK - previous build overwritten." -ForegroundColor Green
 Write-Host "  Exe      : $Exe"
 Write-Host "  Shortcut : $(Join-Path $Root 'MiniPaint.lnk')"
 Write-Host ""
