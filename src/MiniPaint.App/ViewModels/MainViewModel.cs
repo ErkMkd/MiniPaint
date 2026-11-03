@@ -278,6 +278,50 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     }
 
     [RelayCommand]
+    private async Task ImageSizeAsync() => await ShowResizeDialogAsync(ResizeDialogMode.ImageSize);
+
+    [RelayCommand]
+    private async Task CanvasSizeAsync() => await ShowResizeDialogAsync(ResizeDialogMode.CanvasSize);
+
+    private async Task ShowResizeDialogAsync(ResizeDialogMode mode)
+    {
+        var ws = ActiveWorkspace;
+        if (ws is null || _window is null) return;
+
+        if (ws.IsTransforming) ws.CancelTransform();
+        if (ws.IsEditingSelection) ws.CancelSelectionEdit();
+
+        var vm = new ResizeDocumentViewModel(mode, ws.Document.Width, ws.Document.Height);
+        var dlg = new Views.ResizeDocumentWindow(vm);
+        var ok = await dlg.ShowDialog<bool?>(_window);
+        if (ok != true) return;
+
+        try
+        {
+            AppLog.Info($"{mode}: {ws.Document.Width}x{ws.Document.Height} → {vm.ResultWidth}x{vm.ResultHeight}" +
+                        (mode == ResizeDialogMode.CanvasSize ? $" anchor={vm.Anchor}" : ""));
+
+            DocumentResizeCommand cmd = mode == ResizeDialogMode.CanvasSize
+                ? DocumentResizeCommand.CanvasSize(
+                    ws.Document, vm.ResultWidth, vm.ResultHeight, vm.Anchor, ws.NotifyChanged)
+                : DocumentResizeCommand.ImageSize(
+                    ws.Document, vm.ResultWidth, vm.ResultHeight, ws.NotifyChanged);
+
+            // Factory already applied the mutation; record for undo without re-executing.
+            ws.History.Record(cmd);
+            if (ws.Selection.HasSelection)
+                ws.Selection.ClampToDocument(ws.Document.Width, ws.Document.Height);
+            ws.NotifyChanged();
+            UpdateStatus();
+            FitRequested?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"{mode} failed", ex);
+        }
+    }
+
+    [RelayCommand]
     private void CloseDocument()
     {
         if (SelectedTab is null) return;

@@ -1,0 +1,79 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:MiniPaint.App.ViewModels"
+        x:Class="MiniPaint.App.Views.ResizeDocumentWindow"
+        x:DataType="vm:ResizeDocumentViewModel"
+        Width="420" Height="420"
+        MinWidth="380" MinHeight="360"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="#2D2D30"
+        Foreground="#DDDDDD"
+        Title="{Binding Title}">
+
+  <Window.Styles>
+    <Style Selector="Button.anchor">
+      <Setter Property="Width" Value="36" />
+      <Setter Property="Height" Value="36" />
+      <Setter Property="Margin" Value="2" />
+      <Setter Property="Padding" Value="0" />
+    </Style>
+  </Window.Styles>
+
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="OK" Width="88" IsDefault="True" Click="OnOkClick" />
+      <Button Content="Cancel" Width="88" IsCancel="True" Click="OnCancelClick" />
+    </StackPanel>
+
+    <StackPanel Spacing="12">
+      <TextBlock Text="{Binding Subtitle}" TextWrapping="Wrap" Foreground="#AAA" FontSize="12" />
+
+      <Grid ColumnDefinitions="Auto,*,Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="8">
+        <TextBlock Text="Width" VerticalAlignment="Center" />
+        <NumericUpDown Grid.Column="1" Minimum="1" Maximum="16384" Increment="1"
+                       FormatString="0"
+                       Value="{Binding WidthValue}" />
+        <TextBlock Grid.Column="2" Text="Height" VerticalAlignment="Center" />
+        <NumericUpDown Grid.Column="3" Minimum="1" Maximum="16384" Increment="1"
+                       FormatString="0"
+                       Value="{Binding HeightValue}" />
+
+        <TextBlock Grid.Row="1" Text="px" Foreground="#888" FontSize="11" VerticalAlignment="Center" />
+        <TextBlock Grid.Row="1" Grid.Column="2" Text="px" Foreground="#888" FontSize="11" VerticalAlignment="Center" />
+      </Grid>
+
+      <CheckBox Content="Constrain proportions"
+                IsChecked="{Binding ConstrainProportions}"
+                IsVisible="{Binding IsImageMode}" />
+
+      <StackPanel IsVisible="{Binding IsCanvasMode}" Spacing="8">
+        <TextBlock Text="Anchor" FontSize="12" Foreground="#CCC" />
+        <UniformGrid Columns="3" Rows="3" Width="120" Height="120" HorizontalAlignment="Left">
+          <Button Classes="anchor" Tag="NorthWest" Click="OnAnchorClick"
+                  Background="{Binding AnchorNorthWestBrush}" />
+          <Button Classes="anchor" Tag="North" Click="OnAnchorClick"
+                  Background="{Binding AnchorNorthBrush}" />
+          <Button Classes="anchor" Tag="NorthEast" Click="OnAnchorClick"
+                  Background="{Binding AnchorNorthEastBrush}" />
+          <Button Classes="anchor" Tag="West" Click="OnAnchorClick"
+                  Background="{Binding AnchorWestBrush}" />
+          <Button Classes="anchor" Tag="Center" Click="OnAnchorClick"
+                  Background="{Binding AnchorCenterBrush}" />
+          <Button Classes="anchor" Tag="East" Click="OnAnchorClick"
+                  Background="{Binding AnchorEastBrush}" />
+          <Button Classes="anchor" Tag="SouthWest" Click="OnAnchorClick"
+                  Background="{Binding AnchorSouthWestBrush}" />
+          <Button Classes="anchor" Tag="South" Click="OnAnchorClick"
+                  Background="{Binding AnchorSouthBrush}" />
+          <Button Classes="anchor" Tag="SouthEast" Click="OnAnchorClick"
+                  Background="{Binding AnchorSouthEastBrush}" />
+        </UniformGrid>
+        <TextBlock Text="{Binding AnchorLabel}" FontSize="11" Foreground="#888" />
+      </StackPanel>
+
+      <TextBlock Text="{Binding InterpolationNote}" FontSize="11" Foreground="#777"
+                 IsVisible="{Binding IsImageMode}" TextWrapping="Wrap" />
+    </StackPanel>
+  </DockPanel>
+</Window>

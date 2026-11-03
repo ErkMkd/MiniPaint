@@ -70,6 +70,8 @@ public partial class MainWindow : Window
 
         bool alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
         if (ctrl && alt && e.Key == Key.T) { vm.SetToolSelectionEditCommand.Execute(null); e.Handled = true; }
+        else if (ctrl && alt && e.Key == Key.I) { vm.ImageSizeCommand.Execute(null); e.Handled = true; }
+        else if (ctrl && alt && e.Key == Key.C) { vm.CanvasSizeCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.T) { vm.ToggleFreeTransformCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.C) { vm.CopyCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.X) { vm.CutCommand.Execute(null); e.Handled = true; }

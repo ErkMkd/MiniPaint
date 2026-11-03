@@ -11,8 +11,8 @@ public sealed class PaintDocument : IDisposable
     private bool _disposed;
 
     public Guid Id { get; } = Guid.NewGuid();
-    public int Width { get; }
-    public int Height { get; }
+    public int Width { get; private set; }
+    public int Height { get; private set; }
     public string Name { get; set; }
     public string? FilePath { get; set; }
     public string? ProjectPath { get; set; }
@@ -157,6 +157,17 @@ public sealed class PaintDocument : IDisposable
         var layer = RequireLayer(layerId);
         layer.OffsetX = x;
         layer.OffsetY = y;
+        IsDirty = true;
+    }
+
+    /// <summary>Change document canvas dimensions (does not touch layer pixels).</summary>
+    public void SetSize(int width, int height)
+    {
+        ThrowIfDisposed();
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+        Width = width;
+        Height = height;
         IsDirty = true;
     }
 

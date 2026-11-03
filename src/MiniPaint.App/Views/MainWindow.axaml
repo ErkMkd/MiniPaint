@@ -46,6 +46,10 @@
         <MenuItem Header="_Apply Transform" Command="{Binding CommitTransformCommand}" InputGesture="Enter" />
         <MenuItem Header="Cancel Transform" Command="{Binding CancelTransformCommand}" InputGesture="Escape" />
       </MenuItem>
+      <MenuItem Header="_Image">
+        <MenuItem Header="_Image Size..." Command="{Binding ImageSizeCommand}" InputGesture="Ctrl+Alt+I" />
+        <MenuItem Header="_Canvas Size..." Command="{Binding CanvasSizeCommand}" InputGesture="Ctrl+Alt+C" />
+      </MenuItem>
       <MenuItem Header="_View">
         <MenuItem Header="_Fit to Window" Command="{Binding FitToWindowCommand}" InputGesture="Ctrl+0" />
         <MenuItem Header="_Actual Pixels (100%)" Command="{Binding Zoom100Command}" InputGesture="Ctrl+1" />

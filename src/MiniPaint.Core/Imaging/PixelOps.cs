@@ -1,4 +1,5 @@
 using MiniPaint.Core.Composition;
+using SkiaSharp;
 
 namespace MiniPaint.Core.Imaging;
 
@@ -194,5 +195,35 @@ public static class PixelOps
         double newPanX = cursorScreenX - docX * newZoom;
         double newPanY = cursorScreenY - docY * newZoom;
         return (newPanX, newPanY);
+    }
+
+    /// <summary>
+    /// Scale a buffer with Skia Mitchell cubic resampling (bicubic-class). Caller owns the result.
+    /// </summary>
+    public static PixelBuffer ScaleBuffer(PixelBuffer source, int newWidth, int newHeight)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(newWidth);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(newHeight);
+
+        if (source.Width == newWidth && source.Height == newHeight)
+            return source.Clone();
+
+        using var srcBmp = ImageCodec.ToSkBitmap(source);
+        var info = new SKImageInfo(newWidth, newHeight, SKColorType.Rgba8888, SKAlphaType.Unpremul);
+        using var dstBmp = new SKBitmap(info);
+        dstBmp.Erase(SKColors.Transparent);
+
+        using (var canvas = new SKCanvas(dstBmp))
+        {
+            var sampling = new SKSamplingOptions(SKCubicResampler.Mitchell);
+            using var img = SKImage.FromBitmap(srcBmp);
+            var dest = SKRect.Create(0, 0, newWidth, newHeight);
+            canvas.DrawImage(img, dest, sampling);
+        }
+
+        var pixels = new byte[newWidth * newHeight * 4];
+        System.Runtime.InteropServices.Marshal.Copy(dstBmp.GetPixels(), pixels, 0, pixels.Length);
+        return new PixelBuffer(newWidth, newHeight, pixels);
     }
 }

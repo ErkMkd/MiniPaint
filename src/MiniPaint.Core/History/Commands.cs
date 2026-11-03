@@ -381,3 +381,138 @@ public sealed class AddEmptyLayerCommand : IEditCommand
         }
     }
 }
+
+/// <summary>
+/// Undoable document canvas/image resize. Restores dimensions + per-layer pixels and offsets.
+/// </summary>
+public sealed class DocumentResizeCommand : IEditCommand, IDisposable
+{
+    private readonly PaintDocument _document;
+    private readonly DocumentSnapshot _before;
+    private readonly DocumentSnapshot _after;
+    private readonly Action? _onChanged;
+    private bool _disposed;
+
+    public string Name { get; }
+
+    private DocumentResizeCommand(
+        string name,
+        PaintDocument document,
+        DocumentSnapshot before,
+        DocumentSnapshot after,
+        Action? onChanged)
+    {
+        Name = name;
+        _document = document;
+        _before = before;
+        _after = after;
+        _onChanged = onChanged;
+    }
+
+    public static DocumentResizeCommand CanvasSize(
+        PaintDocument document,
+        int newWidth,
+        int newHeight,
+        CanvasAnchor anchor,
+        Action? onChanged = null)
+    {
+        var before = DocumentSnapshot.Capture(document);
+        DocumentResize.ResizeCanvas(document, newWidth, newHeight, anchor);
+        var after = DocumentSnapshot.Capture(document);
+        return new DocumentResizeCommand("Canvas Size", document, before, after, onChanged);
+    }
+
+    public static DocumentResizeCommand ImageSize(
+        PaintDocument document,
+        int newWidth,
+        int newHeight,
+        Action? onChanged = null)
+    {
+        var before = DocumentSnapshot.Capture(document);
+        DocumentResize.ResizeImage(document, newWidth, newHeight);
+        var after = DocumentSnapshot.Capture(document);
+        return new DocumentResizeCommand("Image Size", document, before, after, onChanged);
+    }
+
+    public void Execute() => Apply(_after);
+
+    public void Undo() => Apply(_before);
+
+    private void Apply(DocumentSnapshot snap)
+    {
+        snap.RestoreInto(_document);
+        _onChanged?.Invoke();
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _before.Dispose();
+        _after.Dispose();
+        _disposed = true;
+        GC.SuppressFinalize(this);
+    }
+}
+
+internal sealed class DocumentSnapshot : IDisposable
+{
+    public int Width { get; }
+    public int Height { get; }
+    private readonly LayerSnap[] _layers;
+    private bool _disposed;
+
+    private DocumentSnapshot(int width, int height, LayerSnap[] layers)
+    {
+        Width = width;
+        Height = height;
+        _layers = layers;
+    }
+
+    public static DocumentSnapshot Capture(PaintDocument document)
+    {
+        var layers = new LayerSnap[document.Layers.Count];
+        for (int i = 0; i < document.Layers.Count; i++)
+        {
+            var layer = document.Layers[i];
+            layers[i] = new LayerSnap(
+                layer.Id,
+                layer.Pixels.Clone(),
+                layer.OffsetX,
+                layer.OffsetY);
+        }
+
+        return new DocumentSnapshot(document.Width, document.Height, layers);
+    }
+
+    public void RestoreInto(PaintDocument document)
+    {
+        document.SetSize(Width, Height);
+        foreach (var snap in _layers)
+        {
+            Layer? layer = null;
+            try { layer = document.RequireLayer(snap.Id); }
+            catch (ArgumentException) { continue; }
+
+            layer.ReplacePixels(snap.Pixels.Clone());
+            layer.OffsetX = snap.OffsetX;
+            layer.OffsetY = snap.OffsetY;
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        foreach (var snap in _layers)
+            snap.Pixels.Dispose();
+        _disposed = true;
+        GC.SuppressFinalize(this);
+    }
+
+    private sealed class LayerSnap(Guid id, PixelBuffer pixels, int offsetX, int offsetY)
+    {
+        public Guid Id { get; } = id;
+        public PixelBuffer Pixels { get; } = pixels;
+        public int OffsetX { get; } = offsetX;
+        public int OffsetY { get; } = offsetY;
+    }
+}

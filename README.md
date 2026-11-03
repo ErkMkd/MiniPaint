@@ -54,6 +54,8 @@ In the app: **Help → Open Log Folder**.
 
 - Multi-document tabs (PNG/JPEG open; `.minipaint` project)
 - Layers: add/delete/duplicate/rename, reorder, visibility, opacity, blend modes, move
+- **Image → Image Size…** (Ctrl+Alt+I): scale all layer pixels (Skia Mitchell cubic / bicubic)
+- **Image → Canvas Size…** (Ctrl+Alt+C): crop/extend workspace without scaling; 9-point anchor
 - Cursor-centered zoom, pan (middle mouse / Space+drag), nearest-neighbor at high zoom
 - Transparency checkerboard, fit-to-window, 100%
 - Rectangular selection with marching ants; copy/cut/paste across documents as new layers
