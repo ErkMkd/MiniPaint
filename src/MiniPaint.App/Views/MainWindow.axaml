@@ -101,28 +101,42 @@
           <Button ToolTip.Tip="Rectangular Selection (V) — drag inside moves selection; Ctrl+D to clear before new marquee"
                   Command="{Binding SetToolSelectCommand}"
                   Background="{Binding CurrentTool, Converter={x:Static ctrl:ToolHighlightConverter.Instance}, ConverterParameter=RectSelect}"
-                  HorizontalAlignment="Stretch" Height="40" Content="Sel" FontSize="12" />
+                  HorizontalAlignment="Stretch" Height="44" Padding="6">
+            <Image Source="/Assets/Icons/rect-select.png" Width="28" Height="28" Stretch="Uniform" />
+          </Button>
           <Button ToolTip.Tip="Transform Selection (Ctrl+Alt+T) — resize selection handles"
                   Command="{Binding SetToolSelectionEditCommand}"
                   Background="{Binding CurrentTool, Converter={x:Static ctrl:ToolHighlightConverter.Instance}, ConverterParameter=SelectionEdit}"
-                  HorizontalAlignment="Stretch" Height="40" Content="Sel↔" FontSize="11" />
+                  HorizontalAlignment="Stretch" Height="44" Padding="6">
+            <Image Source="/Assets/Icons/selection-edit.png" Width="28" Height="28" Stretch="Uniform" />
+          </Button>
           <Button ToolTip.Tip="Move (M) — moves selection pixels when a selection exists; otherwise moves the layer"
                   Command="{Binding SetToolMoveCommand}"
                   Background="{Binding CurrentTool, Converter={x:Static ctrl:ToolHighlightConverter.Instance}, ConverterParameter=MoveLayer}"
-                  HorizontalAlignment="Stretch" Height="40" Content="Move" FontSize="12" />
+                  HorizontalAlignment="Stretch" Height="44" Padding="6">
+            <Image Source="/Assets/Icons/move.png" Width="28" Height="28" Stretch="Uniform" />
+          </Button>
           <Button ToolTip.Tip="Pan (H / Space+drag)"
                   Command="{Binding SetToolPanCommand}"
                   Background="{Binding CurrentTool, Converter={x:Static ctrl:ToolHighlightConverter.Instance}, ConverterParameter=Pan}"
-                  HorizontalAlignment="Stretch" Height="40" Content="Pan" FontSize="12" />
+                  HorizontalAlignment="Stretch" Height="44" Padding="6">
+            <Image Source="/Assets/Icons/pan.png" Width="28" Height="28" Stretch="Uniform" />
+          </Button>
           <Button ToolTip.Tip="Free Transform (Ctrl+T)"
                   Command="{Binding ToggleFreeTransformCommand}"
                   Background="{Binding CurrentTool, Converter={x:Static ctrl:ToolHighlightConverter.Instance}, ConverterParameter=FreeTransform}"
-                  HorizontalAlignment="Stretch" Height="40" Content="Xform" FontSize="11" />
+                  HorizontalAlignment="Stretch" Height="44" Padding="6">
+            <Image Source="/Assets/Icons/free-transform.png" Width="28" Height="28" Stretch="Uniform" />
+          </Button>
           <Separator Margin="0,8" />
           <Button ToolTip.Tip="Fit" Command="{Binding FitToWindowCommand}"
-                  HorizontalAlignment="Stretch" Height="32" Content="Fit" FontSize="11" />
+                  HorizontalAlignment="Stretch" Height="40" Padding="6">
+            <Image Source="/Assets/Icons/fit.png" Width="24" Height="24" Stretch="Uniform" />
+          </Button>
           <Button ToolTip.Tip="100%" Command="{Binding Zoom100Command}"
-                  HorizontalAlignment="Stretch" Height="32" Content="100%" FontSize="11" />
+                  HorizontalAlignment="Stretch" Height="40" Padding="6">
+            <Image Source="/Assets/Icons/zoom-100.png" Width="24" Height="24" Stretch="Uniform" />
+          </Button>
         </StackPanel>
       </Border>
 
