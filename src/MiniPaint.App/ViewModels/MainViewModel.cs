@@ -59,6 +59,15 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         AppLog.OpenLogFolder();
     }
 
+    [RelayCommand]
+    private async Task AboutAsync()
+    {
+        if (_window is null) return;
+        AppLog.Info("About dialog opened");
+        var about = new Views.AboutWindow();
+        await about.ShowDialog(_window);
+    }
+
     private void WireClipboard()
     {
         _manager.Clipboard.WriteSystemPng = bytes =>

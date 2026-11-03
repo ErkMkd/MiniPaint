@@ -1,0 +1,23 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="MiniPaint.App.Views.AboutWindow"
+        Title="About MiniPaint"
+        Width="420" Height="220"
+        CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Background="#2D2D30"
+        Foreground="#DDDDDD">
+
+  <DockPanel Margin="20">
+    <Button DockPanel.Dock="Bottom" Content="OK" Width="88" HorizontalAlignment="Right"
+            IsDefault="True" IsCancel="True" Click="OnOkClick" Margin="0,16,0,0" />
+    <StackPanel Spacing="10" VerticalAlignment="Center">
+      <TextBlock Text="MiniPaint" FontSize="22" FontWeight="SemiBold" />
+      <TextBlock Text="Local Windows 2D image editor" Foreground="#AAA" FontSize="12" />
+      <TextBlock Text="Développé par Cursor, orchestré par Eric Kernin."
+                 FontSize="14" TextWrapping="Wrap" Margin="0,8,0,0" />
+      <TextBlock Text="MIT License — Copyright (c) 2026 Éric Kernin / ErkMkd"
+                 FontSize="11" Foreground="#888" TextWrapping="Wrap" />
+    </StackPanel>
+  </DockPanel>
+</Window>

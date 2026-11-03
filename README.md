@@ -2,6 +2,8 @@
 
 Local Windows 2D image editor — C# / .NET 10, Avalonia UI, SkiaSharp.
 
+**Développé par Cursor, orchestré par Eric Kernin.**
+
 ## Requirements
 
 - .NET SDK 10.x (`dotnet --list-sdks`)
@@ -67,6 +69,10 @@ In the app: **Help → Open Log Folder**.
 - `src/MiniPaint.Core` — document model, composition, selection, clipboard, history, project I/O
 - `src/MiniPaint.App` — Avalonia dark editor UI
 - `tests/MiniPaint.Core.Tests` — pixel ops, alpha composition, coordinates, serialization
+
+## Credits
+
+Développé par Cursor, orchestré par Eric Kernin.
 
 ## License
 
