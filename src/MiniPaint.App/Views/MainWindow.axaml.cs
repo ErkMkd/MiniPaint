@@ -24,7 +24,7 @@ public partial class MainWindow : Window
 
     private MainViewModel? Vm => DataContext as MainViewModel;
 
-    private void OnOpened(object? sender, EventArgs e)
+    private async void OnOpened(object? sender, EventArgs e)
     {
         if (Vm is null) return;
         AppLog.Info($"MainWindow opened size={Bounds.Width}x{Bounds.Height}");
@@ -50,6 +50,18 @@ public partial class MainWindow : Window
         // Start with a blank document so the app is immediately usable.
         if (Vm.Tabs.Count == 0)
             Vm.NewDocumentCommand.Execute(null);
+
+        try
+        {
+            AppLog.Info("Showing splash screen");
+            var splash = new SplashWindow();
+            await splash.ShowDialog(this);
+            AppLog.Info("Splash screen closed");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"Splash screen failed: {ex.Message}");
+        }
     }
 
     /// <summary>
