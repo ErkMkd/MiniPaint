@@ -5,6 +5,10 @@ namespace MiniPaint.App.ViewModels;
 
 public partial class ColorModeViewModel : ViewModelBase
 {
+    private readonly DocumentColorSettings _original;
+    private readonly Action<DocumentColorSettings>? _applyPreview;
+    private bool _suspendPreview;
+
     public string Title => "Image Mode";
 
     public ColorModeOption[] Modes { get; } =
@@ -39,6 +43,7 @@ public partial class ColorModeViewModel : ViewModelBase
     [ObservableProperty] public partial decimal ColorCountValue { get; set; } = 256;
     [ObservableProperty] public partial int SelectedEcsCount { get; set; } = 32;
     [ObservableProperty] public partial int SelectedAgaCount { get; set; } = 256;
+    [ObservableProperty] public partial bool PreviewEnabled { get; set; }
 
     public bool ShowIndexedCount => SelectedMode.Kind == ColorModeKind.Indexed;
     public bool ShowEcsCount => SelectedMode.Kind == ColorModeKind.Ecs;
@@ -56,21 +61,42 @@ public partial class ColorModeViewModel : ViewModelBase
         _ => ""
     };
 
-    public ColorModeViewModel(DocumentColorSettings current)
+    /// <param name="applyPreview">Called with settings to show on the canvas (temporary). Pass original to restore.</param>
+    public ColorModeViewModel(DocumentColorSettings current, Action<DocumentColorSettings>? applyPreview = null)
     {
         ArgumentNullException.ThrowIfNull(current);
         current.Sanitize();
+        _original = current.Clone();
+        _applyPreview = applyPreview;
+
+        _suspendPreview = true;
         SelectedMode = Modes.First(m => m.Kind == current.Mode);
         SelectedQuantizer = Quantizers.First(q => q.Kind == current.Quantizer);
         SelectedDither = Dithers.First(d => d.Kind == current.Dither);
         ColorCountValue = current.Mode == ColorModeKind.Indexed ? current.ColorCount : 256;
         SelectedEcsCount = current.Mode == ColorModeKind.Ecs ? current.ColorCount : 32;
         SelectedAgaCount = current.Mode == ColorModeKind.Aga ? current.ColorCount : 256;
+        PreviewEnabled = false;
+        _suspendPreview = false;
     }
 
-    partial void OnSelectedModeChanged(ColorModeOption value) => RaiseVisibility();
-    partial void OnSelectedEcsCountChanged(int value) =>
+    partial void OnSelectedModeChanged(ColorModeOption value)
+    {
+        RaiseVisibility();
+        RequestPreviewRefresh();
+    }
+
+    partial void OnSelectedEcsCountChanged(int value)
+    {
         OnPropertyChanged(nameof(ShowHalfBrightNote));
+        RequestPreviewRefresh();
+    }
+
+    partial void OnSelectedAgaCountChanged(int value) => RequestPreviewRefresh();
+    partial void OnColorCountValueChanged(decimal value) => RequestPreviewRefresh();
+    partial void OnSelectedQuantizerChanged(QuantizerOption value) => RequestPreviewRefresh();
+    partial void OnSelectedDitherChanged(DitherOption value) => RequestPreviewRefresh();
+    partial void OnPreviewEnabledChanged(bool value) => RequestPreviewRefresh();
 
     private void RaiseVisibility()
     {
@@ -82,8 +108,25 @@ public partial class ColorModeViewModel : ViewModelBase
         OnPropertyChanged(nameof(Subtitle));
     }
 
+    public void RequestPreviewRefresh()
+    {
+        if (_suspendPreview || _applyPreview is null) return;
+
+        if (!PreviewEnabled)
+        {
+            _applyPreview(_original);
+            return;
+        }
+
+        _applyPreview(ToSettings(_original));
+    }
+
+    /// <summary>Restore the document to the settings from when the dialog opened.</summary>
+    public void RestoreOriginal() => _applyPreview?.Invoke(_original);
+
     public DocumentColorSettings ToSettings(DocumentColorSettings? previous = null)
     {
+        previous ??= _original;
         var s = new DocumentColorSettings
         {
             Mode = SelectedMode.Kind,
@@ -101,8 +144,7 @@ public partial class ColorModeViewModel : ViewModelBase
         s.Sanitize();
 
         // Keep existing palette when only dither (or identical mode/count/quantizer) changes.
-        if (previous is not null &&
-            previous.Mode == s.Mode &&
+        if (previous.Mode == s.Mode &&
             previous.ColorCount == s.ColorCount &&
             previous.Quantizer == s.Quantizer &&
             previous.HasValidPalette &&

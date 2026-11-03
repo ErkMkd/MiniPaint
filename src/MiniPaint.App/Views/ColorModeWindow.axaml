@@ -3,8 +3,8 @@
         xmlns:vm="using:MiniPaint.App.ViewModels"
         x:Class="MiniPaint.App.Views.ColorModeWindow"
         x:DataType="vm:ColorModeViewModel"
-        Width="460" Height="440"
-        MinWidth="420" MinHeight="400"
+        Width="460" Height="480"
+        MinWidth="420" MinHeight="440"
         WindowStartupLocation="CenterOwner"
         CanResize="False"
         Background="#2D2D30"
@@ -12,9 +12,14 @@
         Title="{Binding Title}">
 
   <DockPanel Margin="16">
-    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
-      <Button Content="OK" Width="88" IsDefault="True" Click="OnOkClick" />
-      <Button Content="Cancel" Width="88" IsCancel="True" Click="OnCancelClick" />
+    <StackPanel DockPanel.Dock="Bottom" Spacing="10" Margin="0,16,0,0">
+      <CheckBox Content="Preview"
+                IsChecked="{Binding PreviewEnabled}"
+                ToolTip.Tip="Apply the selected mode and settings to the canvas while this dialog is open." />
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8">
+        <Button Content="OK" Width="88" IsDefault="True" Click="OnOkClick" />
+        <Button Content="Cancel" Width="88" IsCancel="True" Click="OnCancelClick" />
+      </StackPanel>
     </StackPanel>
 
     <StackPanel Spacing="12">

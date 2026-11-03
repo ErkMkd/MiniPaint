@@ -371,9 +371,27 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         if (ws.IsEditingSelection) ws.CancelSelectionEdit();
 
         var before = ws.Document.ColorSettings.Clone();
-        var vm = new ColorModeViewModel(before);
+        var vm = new ColorModeViewModel(before, preview =>
+        {
+            ws.Document.ColorSettings.CopyFrom(preview);
+            ws.NotifyChanged();
+            UpdateStatus();
+        });
         var dlg = new Views.ColorModeWindow(vm);
-        var ok = await dlg.ShowDialog<bool?>(_window);
+
+        bool? ok = false;
+        try
+        {
+            ok = await dlg.ShowDialog<bool?>(_window);
+        }
+        finally
+        {
+            // Always leave the document on the pre-dialog settings before commit/cancel.
+            ws.Document.ColorSettings.CopyFrom(before);
+            ws.NotifyChanged();
+            UpdateStatus();
+        }
+
         if (ok != true) return;
 
         var after = vm.ToSettings(before);
@@ -382,7 +400,6 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         try
         {
             StatusText = "Applying image mode…";
-            // Quantizer work runs on next composite; apply settings via history.
             var cmd = new ColorSettingsCommand(ws.Document, before, after, ws.NotifyChanged);
             ws.History.Execute(cmd);
             UpdateStatus();
