@@ -20,5 +20,10 @@ public enum QuantizerKind
 public enum DitherKind
 {
     None,
-    FloydSteinberg
+    FloydSteinberg,
+    Bayer4x4,
+    Bayer8x8,
+    Atkinson,
+    Stucki,
+    BlueNoise
 }

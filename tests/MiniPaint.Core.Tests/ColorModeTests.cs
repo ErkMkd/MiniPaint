@@ -103,6 +103,30 @@ public class ColorModeTests
         Assert.Equal(4096, distinct);
     }
 
+    [Theory]
+    [InlineData(DitherKind.None)]
+    [InlineData(DitherKind.FloydSteinberg)]
+    [InlineData(DitherKind.Bayer4x4)]
+    [InlineData(DitherKind.Bayer8x8)]
+    [InlineData(DitherKind.Atkinson)]
+    [InlineData(DitherKind.Stucki)]
+    [InlineData(DitherKind.BlueNoise)]
+    public void DitherKinds_ApplyWithoutThrowing(DitherKind dither)
+    {
+        var buf = new PixelBuffer(32, 32);
+        buf.FillRect(0, 0, 32, 32, 180, 90, 40, 255);
+        var settings = new DocumentColorSettings
+        {
+            Mode = ColorModeKind.Indexed,
+            ColorCount = 8,
+            Quantizer = QuantizerKind.MedianCut,
+            Dither = dither
+        };
+        settings.Sanitize();
+        ColorModePipeline.ApplyInPlace(buf, settings);
+        Assert.True(settings.HasValidPalette);
+    }
+
     [Fact]
     public void SetPalette_Ecs_SnapsTo12Bit()
     {

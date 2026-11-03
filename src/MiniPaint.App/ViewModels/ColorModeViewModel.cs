@@ -31,7 +31,12 @@ public partial class ColorModeViewModel : ViewModelBase
     public DitherOption[] Dithers { get; } =
     [
         new(DitherKind.None, "None"),
-        new(DitherKind.FloydSteinberg, "Floyd–Steinberg")
+        new(DitherKind.FloydSteinberg, "Floyd–Steinberg"),
+        new(DitherKind.Bayer4x4, "Bayer 4×4"),
+        new(DitherKind.Bayer8x8, "Bayer 8×8"),
+        new(DitherKind.Atkinson, "Atkinson"),
+        new(DitherKind.Stucki, "Stucki"),
+        new(DitherKind.BlueNoise, "Blue Noise")
     ];
 
     public int[] EcsColorCounts { get; } = [2, 4, 8, 16, 32, 64];
