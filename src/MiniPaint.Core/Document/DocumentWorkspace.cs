@@ -23,6 +23,9 @@ public sealed class DocumentWorkspace : IDisposable
     public FreeTransformSession? ActiveTransform { get; private set; }
     public bool IsTransforming => ActiveTransform is not null;
 
+    public SelectionEditSession? ActiveSelectionEdit { get; private set; }
+    public bool IsEditingSelection => ActiveSelectionEdit is not null;
+
     public double Zoom { get; private set; } = 1.0;
     public double PanX { get; set; }
     public double PanY { get; set; }
@@ -159,7 +162,35 @@ public sealed class DocumentWorkspace : IDisposable
 
     public void Deselect()
     {
+        if (IsEditingSelection)
+            CancelSelectionEdit();
         Selection.Clear();
+        Changed?.Invoke();
+    }
+
+    public bool BeginSelectionEdit()
+    {
+        if (IsTransforming) return false;
+        if (ActiveSelectionEdit is not null) return true;
+        if (!Selection.HasSelection) return false;
+        ActiveSelectionEdit = new SelectionEditSession(Selection);
+        Changed?.Invoke();
+        return true;
+    }
+
+    public void CommitSelectionEdit()
+    {
+        if (ActiveSelectionEdit is null) return;
+        Selection.ClampToDocument(Document.Width, Document.Height);
+        ActiveSelectionEdit = null;
+        Changed?.Invoke();
+    }
+
+    public void CancelSelectionEdit()
+    {
+        if (ActiveSelectionEdit is null) return;
+        ActiveSelectionEdit.RestoreOriginal();
+        ActiveSelectionEdit = null;
         Changed?.Invoke();
     }
 
@@ -177,6 +208,8 @@ public sealed class DocumentWorkspace : IDisposable
     public bool BeginTransform()
     {
         if (ActiveTransform is not null) return true;
+        if (IsEditingSelection)
+            CancelSelectionEdit();
         var layer = Document.ActiveLayer;
         if (layer is null) return false;
         ActiveTransform = new FreeTransformSession(layer);
@@ -236,9 +269,9 @@ public sealed class DocumentWorkspace : IDisposable
     {
         if (_disposed) return;
         if (ActiveTransform is not null)
-        {
             CancelTransform();
-        }
+        if (ActiveSelectionEdit is not null)
+            CancelSelectionEdit();
         _compositeCache?.Dispose();
         Document.Dispose();
         _disposed = true;

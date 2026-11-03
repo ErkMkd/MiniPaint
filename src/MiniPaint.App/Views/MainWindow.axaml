@@ -40,6 +40,7 @@
         <Separator />
         <MenuItem Header="Select _All" Command="{Binding SelectAllCommand}" InputGesture="Ctrl+A" />
         <MenuItem Header="_Deselect" Command="{Binding DeselectCommand}" InputGesture="Ctrl+D" />
+        <MenuItem Header="_Transform Selection" Command="{Binding SetToolSelectionEditCommand}" InputGesture="Ctrl+Alt+T" />
         <Separator />
         <MenuItem Header="_Free Transform" Command="{Binding ToggleFreeTransformCommand}" InputGesture="Ctrl+T" />
         <MenuItem Header="_Apply Transform" Command="{Binding CommitTransformCommand}" InputGesture="Enter" />
@@ -92,9 +93,12 @@
       <!-- Toolbox -->
       <Border Grid.Column="0" Background="#333337" BorderBrush="#3F3F46" BorderThickness="0,0,1,0">
         <StackPanel Margin="4" Spacing="4">
-          <Button ToolTip.Tip="Rectangular Selection (V)"
+          <Button ToolTip.Tip="Rectangular Selection (V) — drag inside moves selection; Ctrl+D to clear before new marquee"
                   Command="{Binding SetToolSelectCommand}"
                   HorizontalAlignment="Stretch" Height="40" Content="Sel" FontSize="12" />
+          <Button ToolTip.Tip="Transform Selection (Ctrl+Alt+T) — resize selection handles"
+                  Command="{Binding SetToolSelectionEditCommand}"
+                  HorizontalAlignment="Stretch" Height="40" Content="Sel↔" FontSize="11" />
           <Button ToolTip.Tip="Move Layer (M)"
                   Command="{Binding SetToolMoveCommand}"
                   HorizontalAlignment="Stretch" Height="40" Content="Move" FontSize="12" />
@@ -123,6 +127,17 @@
                     Command="{Binding CommitTransformCommand}" />
             <Button Grid.Column="2" Content="Cancel" Padding="10,2"
                     Command="{Binding CancelTransformCommand}" />
+          </Grid>
+        </Border>
+        <Border DockPanel.Dock="Top" Background="#1E3A5F" Padding="8,4"
+                IsVisible="{Binding IsEditingSelection}">
+          <Grid ColumnDefinitions="*,Auto,Auto">
+            <TextBlock Text="{Binding SelectionEditInfo}" VerticalAlignment="Center"
+                       FontSize="12" Foreground="#EEE" TextWrapping="NoWrap" />
+            <Button Grid.Column="1" Content="Apply" Margin="8,0" Padding="10,2"
+                    Command="{Binding CommitSelectionEditCommand}" />
+            <Button Grid.Column="2" Content="Cancel" Padding="10,2"
+                    Command="{Binding CancelSelectionEditCommand}" />
           </Grid>
         </Border>
         <Border Background="#1E1E1E">

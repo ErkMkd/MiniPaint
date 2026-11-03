@@ -51,14 +51,21 @@ public partial class MainWindow : Window
 
         bool ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
 
-        // Transform mode takes priority for Enter / Esc
+        // Transform / selection-edit modes take priority for Enter / Esc
         if (vm.IsTransforming)
         {
             if (e.Key == Key.Enter) { vm.CommitTransformCommand.Execute(null); e.Handled = true; return; }
             if (e.Key == Key.Escape) { vm.CancelTransformCommand.Execute(null); e.Handled = true; return; }
         }
+        if (vm.IsEditingSelection)
+        {
+            if (e.Key == Key.Enter) { vm.CommitSelectionEditCommand.Execute(null); e.Handled = true; return; }
+            if (e.Key == Key.Escape) { vm.CancelSelectionEditCommand.Execute(null); e.Handled = true; return; }
+        }
 
-        if (ctrl && e.Key == Key.T) { vm.ToggleFreeTransformCommand.Execute(null); e.Handled = true; }
+        bool alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+        if (ctrl && alt && e.Key == Key.T) { vm.SetToolSelectionEditCommand.Execute(null); e.Handled = true; }
+        else if (ctrl && e.Key == Key.T) { vm.ToggleFreeTransformCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.C) { vm.CopyCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.X) { vm.CutCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.V) { vm.PasteCommand.Execute(null); e.Handled = true; }

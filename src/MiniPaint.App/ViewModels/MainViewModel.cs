@@ -28,7 +28,9 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     [ObservableProperty] public partial string CursorText { get; set; } = "";
     [ObservableProperty] public partial string SizeText { get; set; } = "";
     [ObservableProperty] public partial bool IsTransforming { get; set; }
+    [ObservableProperty] public partial bool IsEditingSelection { get; set; }
     [ObservableProperty] public partial string TransformInfo { get; set; } = "";
+    [ObservableProperty] public partial string SelectionEditInfo { get; set; } = "";
 
     public DocumentWorkspace? ActiveWorkspace => SelectedTab?.Workspace;
 
@@ -135,7 +137,9 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             CursorText = "";
             SizeText = "";
             IsTransforming = false;
+            IsEditingSelection = false;
             TransformInfo = "";
+            SelectionEditInfo = "";
             return;
         }
 
@@ -144,15 +148,26 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         if (cursorX is int cx && cursorY is int cy)
             CursorText = $"{cx}, {cy}";
         IsTransforming = ws.IsTransforming;
+        IsEditingSelection = ws.IsEditingSelection;
         if (ws.ActiveTransform is { } t)
         {
             TransformInfo =
                 $"W:{t.ScaleX * 100:0.#}% H:{t.ScaleY * 100:0.#}%  ∠ {t.RotationDegrees:0.#}°  —  Enter apply · Esc cancel · Shift ratio · Alt = center (sinon ancre opposée)";
+            SelectionEditInfo = "";
             StatusText = "Free Transform";
+        }
+        else if (ws.IsEditingSelection && ws.Selection.HasSelection)
+        {
+            var s = ws.Selection;
+            SelectionEditInfo =
+                $"Selection {s.Width}×{s.Height} @ {s.X},{s.Y}  —  Enter apply · Esc cancel · Shift ratio · Alt = center (sinon ancre opposée)";
+            TransformInfo = "";
+            StatusText = "Transform Selection";
         }
         else
         {
             TransformInfo = "";
+            SelectionEditInfo = "";
             StatusText = ws.Document.IsDirty ? "Modified" : "Saved";
         }
     }
@@ -274,10 +289,22 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     }
 
     [RelayCommand]
-    private void SelectAll() => ActiveWorkspace?.SelectAll();
+    private void SelectAll()
+    {
+        if (ActiveWorkspace?.IsEditingSelection == true)
+            ActiveWorkspace.CancelSelectionEdit();
+        ActiveWorkspace?.SelectAll();
+        SyncTransformUi();
+    }
 
     [RelayCommand]
-    private void Deselect() => ActiveWorkspace?.Deselect();
+    private void Deselect()
+    {
+        ActiveWorkspace?.Deselect();
+        if (CurrentTool == CanvasTool.SelectionEdit)
+            CurrentTool = CanvasTool.RectSelect;
+        SyncTransformUi();
+    }
 
     [RelayCommand]
     private void Undo()
@@ -370,7 +397,28 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     private void SetToolSelect()
     {
         if (ActiveWorkspace?.IsTransforming == true) ActiveWorkspace.CancelTransform();
+        if (ActiveWorkspace?.IsEditingSelection == true) ActiveWorkspace.CommitSelectionEdit();
         CurrentTool = CanvasTool.RectSelect;
+        SyncTransformUi();
+    }
+
+    [RelayCommand]
+    private void SetToolSelectionEdit()
+    {
+        var ws = ActiveWorkspace;
+        if (ws is null) return;
+        if (ws.IsTransforming) ws.CancelTransform();
+        if (!ws.Selection.HasSelection)
+        {
+            AppLog.Info("Transform Selection: no active selection");
+            StatusText = "Create a selection first (V), then Transform Selection";
+            return;
+        }
+        if (ws.BeginSelectionEdit())
+        {
+            CurrentTool = CanvasTool.SelectionEdit;
+            AppLog.Info("Transform Selection begin");
+        }
         SyncTransformUi();
     }
 
@@ -378,6 +426,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     private void SetToolMove()
     {
         if (ActiveWorkspace?.IsTransforming == true) ActiveWorkspace.CancelTransform();
+        if (ActiveWorkspace?.IsEditingSelection == true) ActiveWorkspace.CommitSelectionEdit();
         CurrentTool = CanvasTool.MoveLayer;
         SyncTransformUi();
     }
@@ -386,7 +435,24 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     private void SetToolPan()
     {
         if (ActiveWorkspace?.IsTransforming == true) ActiveWorkspace.CancelTransform();
+        if (ActiveWorkspace?.IsEditingSelection == true) ActiveWorkspace.CommitSelectionEdit();
         CurrentTool = CanvasTool.Pan;
+        SyncTransformUi();
+    }
+
+    [RelayCommand]
+    private void CommitSelectionEdit()
+    {
+        ActiveWorkspace?.CommitSelectionEdit();
+        CurrentTool = CanvasTool.RectSelect;
+        SyncTransformUi();
+    }
+
+    [RelayCommand]
+    private void CancelSelectionEdit()
+    {
+        ActiveWorkspace?.CancelSelectionEdit();
+        CurrentTool = CanvasTool.RectSelect;
         SyncTransformUi();
     }
 
@@ -447,6 +513,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     public void SyncTransformUi()
     {
         IsTransforming = ActiveWorkspace?.IsTransforming == true;
+        IsEditingSelection = ActiveWorkspace?.IsEditingSelection == true;
         UpdateStatus();
         OnPropertyChanged(nameof(ActiveWorkspace));
     }

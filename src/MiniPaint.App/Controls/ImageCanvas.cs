@@ -7,6 +7,7 @@ using Avalonia.Threading;
 using MiniPaint.App.Logging;
 using MiniPaint.Core.Document;
 using MiniPaint.Core.History;
+using MiniPaint.Core.Selection;
 using MiniPaint.Core.Transform;
 
 namespace MiniPaint.App.Controls;
@@ -15,6 +16,7 @@ public enum CanvasTool
 {
     Pan,
     RectSelect,
+    SelectionEdit,
     MoveLayer,
     FreeTransform
 }
@@ -36,9 +38,12 @@ public sealed class ImageCanvas : Control
     private bool _panning;
     private bool _spaceDown;
     private bool _selecting;
+    private bool _movingSelection;
     private bool _movingLayer;
     private Point _lastPointer;
     private int _selStartX, _selStartY;
+    private int _selMoveOriginX, _selMoveOriginY;
+    private int _selMoveStartDocX, _selMoveStartDocY;
     private int _moveStartDocX, _moveStartDocY;
     private int _layerStartOx, _layerStartOy;
     private DispatcherTimer? _antsTimer;
@@ -47,6 +52,7 @@ public sealed class ImageCanvas : Control
     private ScaleInteraction? _scaleIx;
     private RotateInteraction? _rotateIx;
     private MoveInteraction? _moveIx;
+    private SelectionScaleInteraction? _selScaleIx;
     private TransformHandle _activeHandle = TransformHandle.None;
 
     public DocumentWorkspace? Workspace
@@ -80,7 +86,9 @@ public sealed class ImageCanvas : Control
         _antsTimer.Tick += (_, _) =>
         {
             _antsPhase = (_antsPhase + 1) % 16;
-            if (Workspace?.Selection.HasSelection == true || Workspace?.IsTransforming == true)
+            if (Workspace?.Selection.HasSelection == true ||
+                Workspace?.IsTransforming == true ||
+                Workspace?.IsEditingSelection == true)
                 InvalidateVisual();
         };
         _antsTimer.Start();
@@ -132,6 +140,24 @@ public sealed class ImageCanvas : Control
             if (e.Key == Key.Escape)
             {
                 ws.CancelTransform();
+                TransformModeChanged?.Invoke();
+                e.Handled = true;
+                return;
+            }
+        }
+
+        if (ws?.IsEditingSelection == true)
+        {
+            if (e.Key == Key.Enter)
+            {
+                ws.CommitSelectionEdit();
+                TransformModeChanged?.Invoke();
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.Escape)
+            {
+                ws.CancelSelectionEdit();
                 TransformModeChanged?.Invoke();
                 e.Handled = true;
                 return;
@@ -211,10 +237,47 @@ public sealed class ImageCanvas : Control
             return;
         }
 
+        if (Tool == CanvasTool.SelectionEdit || ws.IsEditingSelection)
+        {
+            if (!ws.IsEditingSelection && !ws.BeginSelectionEdit())
+            {
+                e.Handled = true;
+                return;
+            }
+            BeginSelectionEditInteraction(ws, p, e.KeyModifiers);
+            e.Pointer.Capture(this);
+            e.Handled = true;
+            TransformModeChanged?.Invoke();
+            InvalidateVisual();
+            return;
+        }
+
         if (Tool == CanvasTool.RectSelect)
         {
+            var (docX, docY) = ws.ScreenToDocument(p.X, p.Y);
+            // Photoshop: existing selection → drag inside moves it; new marquee requires Deselect first.
+            if (ws.Selection.HasSelection)
+            {
+                if (ws.Selection.Contains(docX, docY))
+                {
+                    _movingSelection = true;
+                    _selMoveStartDocX = docX;
+                    _selMoveStartDocY = docY;
+                    _selMoveOriginX = ws.Selection.X;
+                    _selMoveOriginY = ws.Selection.Y;
+                    e.Pointer.Capture(this);
+                    e.Handled = true;
+                    return;
+                }
+
+                // Click outside: do not start a new selection while one exists.
+                e.Handled = true;
+                return;
+            }
+
             _selecting = true;
-            (_selStartX, _selStartY) = ws.ScreenToDocument(p.X, p.Y);
+            _selStartX = docX;
+            _selStartY = docY;
             ws.Selection.Set(_selStartX, _selStartY, 0, 0);
             e.Pointer.Capture(this);
             e.Handled = true;
@@ -230,6 +293,39 @@ public sealed class ImageCanvas : Control
             _layerStartOy = layer.OffsetY;
             e.Pointer.Capture(this);
             e.Handled = true;
+        }
+    }
+
+    private void BeginSelectionEditInteraction(DocumentWorkspace ws, Point p, KeyModifiers mods)
+    {
+        var edit = ws.ActiveSelectionEdit;
+        if (edit is null) return;
+
+        double cdx = (p.X - ws.PanX) / ws.Zoom;
+        double cdy = (p.Y - ws.PanY) / ws.Zoom;
+        double handleRadiusDoc = 6.0 / ws.Zoom;
+        var hit = edit.HitTest(cdx, cdy, handleRadiusDoc);
+        bool alt = mods.HasFlag(KeyModifiers.Alt);
+        bool shift = mods.HasFlag(KeyModifiers.Shift);
+
+        if (hit is not TransformHandle.None and not TransformHandle.Move)
+        {
+            _activeHandle = hit;
+            _selScaleIx = edit.BeginScale(hit);
+            _selScaleIx.Update(cdx, cdy, constrainProportions: shift, fromCenter: alt);
+            InvalidateVisual();
+            return;
+        }
+
+        if (hit == TransformHandle.Move || ws.Selection.ContainsDoc(cdx, cdy))
+        {
+            _movingSelection = true;
+            var (docX, docY) = ws.ScreenToDocument(p.X, p.Y);
+            _selMoveStartDocX = docX;
+            _selMoveStartDocY = docY;
+            _selMoveOriginX = ws.Selection.X;
+            _selMoveOriginY = ws.Selection.Y;
+            _selScaleIx = null;
         }
     }
 
@@ -361,6 +457,31 @@ public sealed class ImageCanvas : Control
             return;
         }
 
+        if (_selScaleIx is not null && ws.IsEditingSelection)
+        {
+            double cdx = (p.X - ws.PanX) / ws.Zoom;
+            double cdy = (p.Y - ws.PanY) / ws.Zoom;
+            bool shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+            bool alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+            _selScaleIx.Update(cdx, cdy, constrainProportions: shift, fromCenter: alt);
+            InvalidateVisual();
+            StatusChanged?.Invoke();
+            e.Handled = true;
+            return;
+        }
+
+        if (_movingSelection && ws.Selection.HasSelection)
+        {
+            var (x, y) = ws.ScreenToDocument(p.X, p.Y);
+            int nx = _selMoveOriginX + (x - _selMoveStartDocX);
+            int ny = _selMoveOriginY + (y - _selMoveStartDocY);
+            ws.Selection.Set(nx, ny, ws.Selection.Width, ws.Selection.Height);
+            InvalidateVisual();
+            StatusChanged?.Invoke();
+            e.Handled = true;
+            return;
+        }
+
         if (_selecting)
         {
             var (x, y) = ws.ScreenToDocument(p.X, p.Y);
@@ -387,6 +508,28 @@ public sealed class ImageCanvas : Control
         {
             UpdateTransformCursor(session, ws, p);
         }
+        else if (ws.IsEditingSelection && ws.ActiveSelectionEdit is { } edit)
+        {
+            UpdateSelectionEditCursor(edit, ws, p);
+        }
+        else if (Tool == CanvasTool.RectSelect && ws.Selection.HasSelection)
+        {
+            var (dx, dy) = ws.ScreenToDocument(p.X, p.Y);
+            Cursor = ws.Selection.Contains(dx, dy)
+                ? new Cursor(StandardCursorType.SizeAll)
+                : Cursor.Default;
+        }
+    }
+
+    private void UpdateSelectionEditCursor(SelectionEditSession edit, DocumentWorkspace ws, Point p)
+    {
+        double cdx = (p.X - ws.PanX) / ws.Zoom;
+        double cdy = (p.Y - ws.PanY) / ws.Zoom;
+        double handleRadiusDoc = 6.0 / ws.Zoom;
+        var hit = edit.HitTest(cdx, cdy, handleRadiusDoc);
+        Cursor = hit is not TransformHandle.None
+            ? new Cursor(StandardCursorType.SizeAll)
+            : Cursor.Default;
     }
 
     private void UpdateTransformCursor(FreeTransformSession session, DocumentWorkspace ws, Point p)
@@ -409,7 +552,7 @@ public sealed class ImageCanvas : Control
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         var ws = Workspace;
-        if (_selecting && ws is not null)
+        if ((_selecting || _movingSelection || _selScaleIx is not null) && ws is not null)
         {
             ws.Selection.ClampToDocument(ws.Document.Width, ws.Document.Height);
             InvalidateVisual();
@@ -430,10 +573,12 @@ public sealed class ImageCanvas : Control
 
         _panning = false;
         _selecting = false;
+        _movingSelection = false;
         _movingLayer = false;
         _scaleIx = null;
         _rotateIx = null;
         _moveIx = null;
+        _selScaleIx = null;
         _activeHandle = TransformHandle.None;
         e.Pointer.Capture(null);
         base.OnPointerReleased(e);
@@ -473,6 +618,8 @@ public sealed class ImageCanvas : Control
 
         if (ws.IsTransforming && ws.ActiveTransform is { } session)
             DrawTransformOverlay(context, ws, session);
+        else if (ws.IsEditingSelection && ws.ActiveSelectionEdit is { } edit)
+            DrawSelectionEditOverlay(context, ws, edit);
         else if (ws.Selection.HasSelection)
             DrawMarchingAnts(context, ws);
     }
@@ -592,6 +739,28 @@ public sealed class ImageCanvas : Control
         {
             DashStyle = new DashStyle(new double[] { 4, 4 }, _antsPhase)
         }, rect);
+    }
+
+    private void DrawSelectionEditOverlay(DrawingContext context, DocumentWorkspace ws, SelectionEditSession edit)
+    {
+        DrawMarchingAnts(context, ws);
+
+        TransformHandle[] handles =
+        [
+            TransformHandle.NW, TransformHandle.N, TransformHandle.NE,
+            TransformHandle.E, TransformHandle.SE, TransformHandle.S,
+            TransformHandle.SW, TransformHandle.W
+        ];
+
+        foreach (var h in handles)
+        {
+            var (dx, dy) = edit.GetHandleDocPoint(h);
+            double sx = dx * ws.Zoom + ws.PanX;
+            double sy = dy * ws.Zoom + ws.PanY;
+            var rect = new Rect(sx - 4, sy - 4, 8, 8);
+            context.FillRectangle(Brushes.White, rect);
+            context.DrawRectangle(null, new Pen(Brushes.DodgerBlue, 1), rect);
+        }
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)

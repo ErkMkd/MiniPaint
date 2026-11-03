@@ -65,6 +65,19 @@ public sealed class SelectionState
 
     public void SelectAll(int docWidth, int docHeight) => Set(0, 0, docWidth, docHeight);
 
+    public bool Contains(int docX, int docY) =>
+        HasSelection && docX >= X && docX < Right && docY >= Y && docY < Bottom;
+
+    public bool ContainsDoc(double docX, double docY) =>
+        HasSelection && docX >= X && docX < Right && docY >= Y && docY < Bottom;
+
+    public void Offset(int dx, int dy)
+    {
+        if (!HasSelection) return;
+        X += dx;
+        Y += dy;
+    }
+
     public void Clear()
     {
         HasSelection = false;
