@@ -1,6 +1,7 @@
 ﻿using System;
 using Avalonia;
 using MiniPaint.App.Logging;
+using MiniPaint.App.Native;
 
 namespace MiniPaint.App;
 
@@ -13,6 +14,9 @@ sealed class Program
         {
             AppLog.Initialize();
             AppLog.InstallGlobalHandlers();
+            // Before any HWND: stable taskbar pin / grouping id.
+            if (OperatingSystem.IsWindows())
+                WindowsShell.SetAppUserModelId();
             AppLog.Info($"Args: [{string.Join(", ", args)}]");
 
             BuildAvaloniaApp()

@@ -16,8 +16,32 @@ dotnet restore MiniPaint.slnx
 dotnet build MiniPaint.slnx
 dotnet test
 dotnet run --project src\MiniPaint.App
-# or: MiniPaint.bat / src\MiniPaint.App\bin\Debug\net10.0\win-x64\MiniPaint.App.exe
+# or: MiniPaint.bat
 ```
+
+## Publish & pin to the Windows taskbar
+
+Debug `bin\` builds and `.bat` launchers do **not** pin reliably. Use the Release self-contained publish:
+
+```powershell
+cd d:\MiniPaint
+.\publish.bat
+# same as: powershell -File .\scripts\Publish-MiniPaint.ps1
+```
+
+| What | Path |
+|------|------|
+| **Pin this** | `d:\MiniPaint\MiniPaint.lnk` (right-click → Pin to taskbar) |
+| Or pin the exe | `d:\MiniPaint\publish\MiniPaint.exe` |
+| Published folder | `d:\MiniPaint\publish\` (self-contained win-x64) |
+
+After each meaningful build you want on the taskbar:
+
+```powershell
+.\publish.bat
+```
+
+That refreshes `publish\` and regenerates `MiniPaint.lnk` (AppUserModelID `ErkMkd.MiniPaint`, embedded icon). `MiniPaint.bat` launches the published exe when present, otherwise falls back to Debug.
 
 ## Logs (crashes)
 
@@ -29,7 +53,7 @@ In the app: **Help → Open Log Folder**.
 ## Features
 
 - Multi-document tabs (PNG/JPEG open; `.minipaint` project)
-- Layers: add/delete/duplicate/rename, reorder, visibility, opacity, move
+- Layers: add/delete/duplicate/rename, reorder, visibility, opacity, blend modes, move
 - Cursor-centered zoom, pan (middle mouse / Space+drag), nearest-neighbor at high zoom
 - Transparency checkerboard, fit-to-window, 100%
 - Rectangular selection with marching ants; copy/cut/paste across documents as new layers
