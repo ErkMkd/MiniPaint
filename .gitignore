@@ -39,7 +39,8 @@ artifacts/
 *.lib
 *.so
 *.dylib
-*.app
+# macOS bundles only (do NOT use *.app — it ignores MiniPaint.App/)
+*.app/
 
 # Keep launcher script (not a binary)
 !MiniPaint.bat
