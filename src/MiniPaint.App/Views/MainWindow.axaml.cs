@@ -2,6 +2,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Platform.Storage;
 using MiniPaint.App.Controls;
 using MiniPaint.App.Logging;
 using MiniPaint.App.ViewModels;
@@ -20,6 +21,8 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         Opened += OnOpened;
+        DragDrop.AddDragOverHandler(this, OnDragOver);
+        DragDrop.AddDropHandler(this, OnDrop);
     }
 
     private MainViewModel? Vm => DataContext as MainViewModel;
@@ -84,6 +87,47 @@ public partial class MainWindow : Window
         slider.AddHandler(PointerReleasedEvent, OnOpacityPointerReleased, RoutingStrategies.Tunnel | RoutingStrategies.Bubble, handledEventsToo: true);
         slider.AddHandler(PointerCaptureLostEvent, OnOpacityPointerCaptureLost, RoutingStrategies.Bubble, handledEventsToo: true);
         slider.ValueChanged += OnOpacityValueChanged;
+    }
+
+    private void OnDragOver(object? sender, DragEventArgs e)
+    {
+        e.DragEffects = HasSupportedDropFiles(e)
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private void OnDrop(object? sender, DragEventArgs e)
+    {
+        if (Vm is null) return;
+        if (e.DataTransfer.TryGetFiles() is not { Length: > 0 } items)
+            return;
+
+        var paths = items
+            .OfType<IStorageFile>()
+            .Select(f => f.TryGetLocalPath())
+            .OfType<string>()
+            .Where(MainViewModel.IsSupportedOpenPath);
+
+        Vm.OpenPaths(paths);
+        e.Handled = true;
+    }
+
+    private static bool HasSupportedDropFiles(DragEventArgs e)
+    {
+        if (!e.DataTransfer.Contains(DataFormat.File))
+            return false;
+
+        // During DragOver some platforms omit file paths — accept File format and filter on Drop.
+        var files = e.DataTransfer.TryGetFiles();
+        if (files is null || files.Length == 0)
+            return true;
+
+        return files.OfType<IStorageFile>().Any(f =>
+        {
+            var path = f.TryGetLocalPath();
+            return path is not null && MainViewModel.IsSupportedOpenPath(path);
+        });
     }
 
     private void OnWindowKeyDown(object? sender, KeyEventArgs e)

@@ -217,10 +217,21 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             ]
         });
 
-        foreach (var file in files)
+        OpenPaths(files.Select(f => f.TryGetLocalPath()).OfType<string>());
+    }
+
+    /// <summary>
+    /// Open local image / IFF / .minipaint paths (File → Open and drag-and-drop).
+    /// </summary>
+    public void OpenPaths(IEnumerable<string?> paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        bool opened = false;
+        foreach (var path in paths)
         {
-            var path = file.TryGetLocalPath();
-            if (path is null) continue;
+            if (string.IsNullOrWhiteSpace(path) || !IsSupportedOpenPath(path))
+                continue;
+
             try
             {
                 AppLog.Info($"Opening: {path}");
@@ -228,12 +239,29 @@ public partial class MainViewModel : ViewModelBase, IDisposable
                     _manager.OpenProject(path);
                 else
                     _manager.OpenImage(path);
+                opened = true;
             }
             catch (Exception ex)
             {
                 AppLog.Error($"Failed to open {path}", ex);
+                StatusText = $"Failed to open {Path.GetFileName(path)} — see log";
             }
         }
+
+        if (opened)
+            FitRequested?.Invoke();
+    }
+
+    public static bool IsSupportedOpenPath(string path)
+    {
+        var ext = Path.GetExtension(path);
+        return ext.Equals(".png", StringComparison.OrdinalIgnoreCase)
+               || ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
+               || ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase)
+               || ext.Equals(".iff", StringComparison.OrdinalIgnoreCase)
+               || ext.Equals(".ilbm", StringComparison.OrdinalIgnoreCase)
+               || ext.Equals(".lbm", StringComparison.OrdinalIgnoreCase)
+               || ext.Equals(ProjectSerializer.Extension, StringComparison.OrdinalIgnoreCase);
     }
 
     [RelayCommand]

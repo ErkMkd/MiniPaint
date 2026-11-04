@@ -66,7 +66,7 @@ In the app: **Help → Open Log Folder**.
 
 ## Features
 
-- **Documents** — multi-tab workspace; open PNG/JPEG/IFF-ILBM; native `.minipaint` ZIP projects (layers preserved); New / Save / Close
+- **Documents** — multi-tab workspace; open PNG/JPEG/IFF-ILBM; native `.minipaint` ZIP projects (layers preserved); New / Save / Close; drag-and-drop files onto the window to open
 - **Export** — merged PNG; IFF-ILBM when the document is in an indexed-family mode (Indexed / ECS / AGA)
 - **Layers** — add / delete / duplicate / rename, reorder, visibility, opacity, Photoshop-style blend modes, Move tool; context menu **New Image from Layer Content** (trim to opaque bounds)
 - **Selection** — rectangular marquee with marching ants; move marquee (V) or lift & drag selected pixels with Move (M); copy / cut / paste as new layers across documents

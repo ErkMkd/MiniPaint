@@ -12,6 +12,7 @@
         Width="1280" Height="800"
         Background="#1E1E1E"
         Foreground="#DDDDDD"
+        DragDrop.AllowDrop="True"
         KeyDown="OnWindowKeyDown">
 
   <Design.DataContext>
