@@ -1,5 +1,9 @@
 # MiniPaint
 
+<p align="center">
+  <img src="src/MiniPaint.App/Assets/SplashScreen.png" alt="MiniPaint splash screen" width="640" />
+</p>
+
 Local Windows 2D image editor — C# / .NET 10, Avalonia UI, SkiaSharp.
 
 **Développé par Cursor, orchestré par Eric Kernin.**
