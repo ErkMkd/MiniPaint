@@ -165,21 +165,39 @@ internal static class Dithering
         (2, 2, 1f / 42f)
     ];
 
-    private static void MapNearest(PixelBuffer buffer, IReadOnlyList<PaletteRgb> palette, int bits)
+    /// <summary>Per-channel snap to the mode's bit depth (same values as <see cref="AmigaColorSpace.SnapChannel"/>).</summary>
+    private static byte[] SnapTable(int bits)
     {
-        var px = buffer.Pixels;
-        for (int i = 0; i < px.Length; i += 4)
-        {
-            if (px[i + 3] == 0) continue;
-            var snapped = AmigaColorSpace.SnapColor(px[i], px[i + 1], px[i + 2], bits);
-            int idx = NearestColor.Find(palette, snapped.R, snapped.G, snapped.B);
-            var c = palette[idx];
-            px[i] = c.R;
-            px[i + 1] = c.G;
-            px[i + 2] = c.B;
-        }
+        var table = new byte[256];
+        for (int v = 0; v < 256; v++)
+            table[v] = AmigaColorSpace.SnapChannel((byte)v, bits);
+        return table;
     }
 
+    private static void MapNearest(PixelBuffer buffer, IReadOnlyList<PaletteRgb> palette, int bits)
+    {
+        var lookup = new PaletteLookup(palette);
+        var snap = SnapTable(bits);
+        int w = buffer.Width;
+        Parallel.For(0, buffer.Height, y =>
+        {
+            var px = buffer.Pixels.Slice(y * w * 4, w * 4);
+            for (int i = 0; i < px.Length; i += 4)
+            {
+                if (px[i + 3] == 0) continue;
+                var c = palette[lookup.Find(snap[px[i]], snap[px[i + 1]], snap[px[i + 2]])];
+                px[i] = c.R;
+                px[i + 1] = c.G;
+                px[i + 2] = c.B;
+            }
+        });
+    }
+
+    /// <summary>
+    /// Error diffusion. Working colors (snapped + diffused error) are kept only for the rows the
+    /// kernel reaches, in a ring of row buffers, instead of three float planes of the whole image;
+    /// the float operations and their order are unchanged, so the output is identical.
+    /// </summary>
     private static void MapErrorDiffusion(
         PixelBuffer buffer,
         IReadOnlyList<PaletteRgb> palette,
@@ -189,63 +207,112 @@ internal static class Dithering
         int w = buffer.Width;
         int h = buffer.Height;
         var px = buffer.Pixels;
+        var lookup = new PaletteLookup(palette);
+        var snap = SnapTable(bits);
 
-        var r = new float[w * h];
-        var g = new float[w * h];
-        var b = new float[w * h];
-        var opaque = new bool[w * h];
-
-        for (int y = 0; y < h; y++)
+        int ring = 1 + kernel.Max(k => k.dy);
+        var r = new float[ring][];
+        var g = new float[ring][];
+        var b = new float[ring][];
+        for (int k = 0; k < ring; k++)
         {
-            for (int x = 0; x < w; x++)
-            {
-                int i = (y * w + x) * 4;
-                int p = y * w + x;
-                if (px[i + 3] == 0) continue;
-                opaque[p] = true;
-                var s = AmigaColorSpace.SnapColor(px[i], px[i + 1], px[i + 2], bits);
-                r[p] = s.R;
-                g[p] = s.G;
-                b[p] = s.B;
-            }
+            r[k] = new float[w];
+            g[k] = new float[w];
+            b[k] = new float[w];
+            if (k < h)
+                LoadRow(px, k, w, snap, r[k], g[k], b[k]);
         }
 
         for (int y = 0; y < h; y++)
         {
+            var rr = r[y % ring];
+            var gg = g[y % ring];
+            var bb = b[y % ring];
+            int row = y * w * 4;
             for (int x = 0; x < w; x++)
             {
-                int p = y * w + x;
-                if (!opaque[p]) continue;
+                int i = row + x * 4;
+                if (px[i + 3] == 0) continue;
 
-                byte nr = (byte)Math.Clamp((int)Math.Round(r[p]), 0, 255);
-                byte ng = (byte)Math.Clamp((int)Math.Round(g[p]), 0, 255);
-                byte nb = (byte)Math.Clamp((int)Math.Round(b[p]), 0, 255);
-                int idx = NearestColor.Find(palette, nr, ng, nb);
-                var c = palette[idx];
+                byte nr = (byte)Math.Clamp((int)Math.Round(rr[x]), 0, 255);
+                byte ng = (byte)Math.Clamp((int)Math.Round(gg[x]), 0, 255);
+                byte nb = (byte)Math.Clamp((int)Math.Round(bb[x]), 0, 255);
+                var c = palette[lookup.Find(nr, ng, nb)];
 
-                float er = r[p] - c.R;
-                float eg = g[p] - c.G;
-                float eb = b[p] - c.B;
+                float er = rr[x] - c.R;
+                float eg = gg[x] - c.G;
+                float eb = bb[x] - c.B;
 
-                int pi = p * 4;
-                px[pi] = c.R;
-                px[pi + 1] = c.G;
-                px[pi + 2] = c.B;
+                px[i] = c.R;
+                px[i + 1] = c.G;
+                px[i + 2] = c.B;
 
                 foreach (var (dx, dy, weight) in kernel)
-                    Diffuse(x + dx, y + dy, er, eg, eb, weight);
+                {
+                    int tx = x + dx;
+                    int ty = y + dy;
+                    if ((uint)tx >= (uint)w || (uint)ty >= (uint)h) continue;
+                    if (px[(ty * w + tx) * 4 + 3] == 0) continue; // error is not spread into transparency
+                    int t = ty % ring;
+                    r[t][tx] += er * weight;
+                    g[t][tx] += eg * weight;
+                    b[t][tx] += eb * weight;
+                }
             }
-        }
 
-        void Diffuse(int x, int y, float er, float eg, float eb, float weight)
-        {
-            if ((uint)x >= (uint)w || (uint)y >= (uint)h) return;
-            int p = y * w + x;
-            if (!opaque[p]) return;
-            r[p] += er * weight;
-            g[p] += eg * weight;
-            b[p] += eb * weight;
+            // Row y is finished: its buffers now hold row y + ring (still untouched source pixels).
+            if (y + ring < h)
+                LoadRow(px, y + ring, w, snap, rr, gg, bb);
         }
+    }
+
+    private static void LoadRow(ReadOnlySpan<byte> px, int y, int w, byte[] snap, float[] r, float[] g, float[] b)
+    {
+        int row = y * w * 4;
+        for (int x = 0; x < w; x++)
+        {
+            int i = row + x * 4;
+            if (px[i + 3] == 0)
+            {
+                r[x] = g[x] = b[x] = 0;
+                continue;
+            }
+            r[x] = snap[px[i]];
+            g[x] = snap[px[i + 1]];
+            b[x] = snap[px[i + 2]];
+        }
+    }
+
+    /// <summary>
+    /// Threshold amplitude for ordered dithering: the typical gap between palette colors — the
+    /// average, over entries, of the largest channel difference to the nearest other entry
+    /// (one channel step for an even palette, 255 for black / white). The former fixed
+    /// 256 / count spread was ±4 levels from 32 colors up, far below real palette gaps, so the
+    /// dither barely showed and Bayer 8×8 rounded to exactly the same result as 4×4.
+    /// </summary>
+    internal static float OrderedSpread(IReadOnlyList<PaletteRgb> palette)
+    {
+        double sum = 0;
+        int counted = 0;
+        for (int i = 0; i < palette.Count; i++)
+        {
+            int best = int.MaxValue;
+            int gap = 0;
+            for (int j = 0; j < palette.Count; j++)
+            {
+                int dr = palette[i].R - palette[j].R;
+                int dg = palette[i].G - palette[j].G;
+                int db = palette[i].B - palette[j].B;
+                int d = dr * dr + dg * dg + db * db;
+                if (d == 0 || d >= best) continue; // itself or duplicates (e.g. black in EHB)
+                best = d;
+                gap = Math.Max(Math.Abs(dr), Math.Max(Math.Abs(dg), Math.Abs(db)));
+            }
+            if (best == int.MaxValue) continue;
+            sum += gap;
+            counted++;
+        }
+        return counted == 0 ? 0f : Math.Clamp((float)(sum / counted), 8f, 255f);
     }
 
     private static void MapOrdered(
@@ -256,32 +323,31 @@ internal static class Dithering
         int size)
     {
         int w = buffer.Width;
-        int h = buffer.Height;
-        var px = buffer.Pixels;
         float denom = size * size;
-        float spread = Math.Clamp(256f / Math.Max(2, palette.Count), 8f, 48f);
+        float spread = OrderedSpread(palette);
+        var lookup = new PaletteLookup(palette);
+        var snap = SnapTable(bits);
 
-        for (int y = 0; y < h; y++)
+        Parallel.For(0, buffer.Height, y =>
         {
+            var px = buffer.Pixels.Slice(y * w * 4, w * 4);
             for (int x = 0; x < w; x++)
             {
-                int i = (y * w + x) * 4;
+                int i = x * 4;
                 if (px[i + 3] == 0) continue;
 
-                var s = AmigaColorSpace.SnapColor(px[i], px[i + 1], px[i + 2], bits);
                 float t = ((matrix[y % size, x % size] + 0.5f) / denom) - 0.5f;
                 float bias = t * spread;
 
-                byte nr = (byte)Math.Clamp((int)Math.Round(s.R + bias), 0, 255);
-                byte ng = (byte)Math.Clamp((int)Math.Round(s.G + bias), 0, 255);
-                byte nb = (byte)Math.Clamp((int)Math.Round(s.B + bias), 0, 255);
-                int idx = NearestColor.Find(palette, nr, ng, nb);
-                var c = palette[idx];
+                byte nr = (byte)Math.Clamp((int)Math.Round(snap[px[i]] + bias), 0, 255);
+                byte ng = (byte)Math.Clamp((int)Math.Round(snap[px[i + 1]] + bias), 0, 255);
+                byte nb = (byte)Math.Clamp((int)Math.Round(snap[px[i + 2]] + bias), 0, 255);
+                var c = palette[lookup.Find(nr, ng, nb)];
                 px[i] = c.R;
                 px[i + 1] = c.G;
                 px[i + 2] = c.B;
             }
-        }
+        });
     }
 
     private static void MapOrderedBlueNoise(
@@ -291,30 +357,29 @@ internal static class Dithering
     {
         const int size = 64;
         int w = buffer.Width;
-        int h = buffer.Height;
-        var px = buffer.Pixels;
-        float spread = Math.Clamp(256f / Math.Max(2, palette.Count), 8f, 48f);
+        float spread = OrderedSpread(palette);
+        var lookup = new PaletteLookup(palette);
+        var snap = SnapTable(bits);
 
-        for (int y = 0; y < h; y++)
+        Parallel.For(0, buffer.Height, y =>
         {
+            var px = buffer.Pixels.Slice(y * w * 4, w * 4);
             for (int x = 0; x < w; x++)
             {
-                int i = (y * w + x) * 4;
+                int i = x * 4;
                 if (px[i + 3] == 0) continue;
 
-                var s = AmigaColorSpace.SnapColor(px[i], px[i + 1], px[i + 2], bits);
                 float t = (BlueNoise64Flat[(y % size) * size + (x % size)] / 255f) - 0.5f;
                 float bias = t * spread;
 
-                byte nr = (byte)Math.Clamp((int)Math.Round(s.R + bias), 0, 255);
-                byte ng = (byte)Math.Clamp((int)Math.Round(s.G + bias), 0, 255);
-                byte nb = (byte)Math.Clamp((int)Math.Round(s.B + bias), 0, 255);
-                int idx = NearestColor.Find(palette, nr, ng, nb);
-                var c = palette[idx];
+                byte nr = (byte)Math.Clamp((int)Math.Round(snap[px[i]] + bias), 0, 255);
+                byte ng = (byte)Math.Clamp((int)Math.Round(snap[px[i + 1]] + bias), 0, 255);
+                byte nb = (byte)Math.Clamp((int)Math.Round(snap[px[i + 2]] + bias), 0, 255);
+                var c = palette[lookup.Find(nr, ng, nb)];
                 px[i] = c.R;
                 px[i + 1] = c.G;
                 px[i + 2] = c.B;
             }
-        }
+        });
     }
 }

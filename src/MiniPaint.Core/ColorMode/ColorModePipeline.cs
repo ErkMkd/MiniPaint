@@ -88,11 +88,12 @@ public static class ColorModePipeline
 
         using var work = buffer.Clone();
         Dithering.Apply(work, palette, settings.BitsPerChannel, settings.Dither);
+        var lookup = new PaletteLookup(palette);
         var wpx = work.PixelsReadOnly;
         for (int i = 0, p = 0; i < wpx.Length; i += 4, p++)
         {
             if (wpx[i + 3] == 0) { indices[p] = 0; continue; }
-            indices[p] = (byte)NearestColor.Find(palette, wpx[i], wpx[i + 1], wpx[i + 2]);
+            indices[p] = (byte)lookup.Find(wpx[i], wpx[i + 1], wpx[i + 2]);
         }
 
         return (indices, palette);
