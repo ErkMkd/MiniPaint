@@ -29,29 +29,11 @@ public static class ImageCodec
         return new PixelBuffer(desired.Width, desired.Height, pixels);
     }
 
-    /// <summary>
-    /// Save via a sibling temp file then replace, with short retries — avoids hanging/failing
-    /// when the destination is briefly locked (Explorer, antivirus, Avalonia save picker).
-    /// </summary>
+    /// <summary>Save via a sibling temp file then replace (see <see cref="SaveViaTempFile"/>).</summary>
     public static void SavePng(PixelBuffer buffer, string path)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        var dir = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
-
-        var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        try
-        {
-            using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
-                SavePng(buffer, stream);
-
-            ReplaceWithRetry(temp, path);
-        }
-        finally
-        {
-            try { if (File.Exists(temp)) File.Delete(temp); } catch { /* ignore */ }
-        }
+        ArgumentNullException.ThrowIfNull(buffer);
+        SaveViaTempFile(path, stream => SavePng(buffer, stream));
     }
 
     public static void SavePng(PixelBuffer buffer, Stream stream)
@@ -75,6 +57,46 @@ public static class ImageCodec
             ?? throw new InvalidOperationException("PNG encode failed.");
         data.SaveTo(stream);
         stream.Flush();
+    }
+
+    public const int DefaultJpegQuality = 90;
+
+    /// <summary>
+    /// JPEG has no alpha: transparent pixels are flattened onto white before encoding.
+    /// <paramref name="quality"/> runs from 1 (smallest file) to 100 (best quality).
+    /// </summary>
+    public static void SaveJpeg(PixelBuffer buffer, string path, int quality = DefaultJpegQuality)
+    {
+        ArgumentNullException.ThrowIfNull(buffer);
+        SaveViaTempFile(path, stream => SaveJpeg(buffer, stream, quality));
+    }
+
+    public static void SaveJpeg(PixelBuffer buffer, Stream stream, int quality = DefaultJpegQuality)
+    {
+        ArgumentNullException.ThrowIfNull(buffer);
+        ArgumentNullException.ThrowIfNull(stream);
+
+        var info = new SKImageInfo(buffer.Width, buffer.Height, SKColorType.Rgba8888, SKAlphaType.Opaque);
+        using var bitmap = new SKBitmap(info);
+        var src = buffer.PixelsReadOnly;
+        unsafe
+        {
+            var dst = new Span<byte>((void*)bitmap.GetPixels(), src.Length);
+            FlattenOntoWhite(src, dst);
+        }
+
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Jpeg, Math.Clamp(quality, 1, 100))
+            ?? throw new InvalidOperationException("JPEG encode failed.");
+        data.SaveTo(stream);
+        stream.Flush();
+    }
+
+    public static byte[] EncodeJpegBytes(PixelBuffer buffer, int quality = DefaultJpegQuality)
+    {
+        using var ms = new MemoryStream();
+        SaveJpeg(buffer, ms, quality);
+        return ms.ToArray();
     }
 
     public static byte[] EncodePngBytes(PixelBuffer buffer)
@@ -106,6 +128,45 @@ public static class ImageCodec
             }
         }
         return bitmap;
+    }
+
+    /// <summary>
+    /// Write via a sibling temp file then replace, with short retries — avoids hanging/failing
+    /// when the destination is briefly locked (Explorer, antivirus, Avalonia save picker).
+    /// </summary>
+    private static void SaveViaTempFile(string path, Action<Stream> write)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var dir = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+
+        var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
+                write(stream);
+
+            ReplaceWithRetry(temp, path);
+        }
+        finally
+        {
+            try { if (File.Exists(temp)) File.Delete(temp); } catch { /* ignore */ }
+        }
+    }
+
+    /// <summary>Straight-alpha RGBA over opaque white; output alpha is 255.</summary>
+    private static void FlattenOntoWhite(ReadOnlySpan<byte> src, Span<byte> dst)
+    {
+        for (int i = 0; i < src.Length; i += 4)
+        {
+            int a = src[i + 3];
+            int inv = 255 - a;
+            dst[i] = (byte)((src[i] * a + 255 * inv + 127) / 255);
+            dst[i + 1] = (byte)((src[i + 1] * a + 255 * inv + 127) / 255);
+            dst[i + 2] = (byte)((src[i + 2] * a + 255 * inv + 127) / 255);
+            dst[i + 3] = 255;
+        }
     }
 
     private static void ReplaceWithRetry(string tempPath, string destinationPath)

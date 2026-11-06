@@ -175,9 +175,7 @@ public static class ProjectSerializer
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        using var composite = Composition.CompositionEngine.Composite(document);
-        if (document.ColorSettings.Mode != ColorModeKind.Rgba)
-            ColorModePipeline.ApplyInPlace(composite, document.ColorSettings);
+        using var composite = CompositeForExport(document);
         ImageCodec.SavePng(composite, path);
     }
 
@@ -185,10 +183,34 @@ public static class ProjectSerializer
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(stream);
-        using var composite = Composition.CompositionEngine.Composite(document);
+        using var composite = CompositeForExport(document);
+        ImageCodec.SavePng(composite, stream);
+    }
+
+    /// <summary>Merged JPEG; transparency is flattened onto white (JPEG has no alpha).</summary>
+    public static void ExportJpeg(PaintDocument document, string path, int quality = ImageCodec.DefaultJpegQuality)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        using var composite = CompositeForExport(document);
+        ImageCodec.SaveJpeg(composite, path, quality);
+    }
+
+    public static void ExportJpeg(PaintDocument document, Stream stream, int quality = ImageCodec.DefaultJpegQuality)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(stream);
+        using var composite = CompositeForExport(document);
+        ImageCodec.SaveJpeg(composite, stream, quality);
+    }
+
+    /// <summary>Merged layers with the document's image mode applied, as shown on the canvas.</summary>
+    private static PixelBuffer CompositeForExport(PaintDocument document)
+    {
+        var composite = Composition.CompositionEngine.Composite(document);
         if (document.ColorSettings.Mode != ColorModeKind.Rgba)
             ColorModePipeline.ApplyInPlace(composite, document.ColorSettings);
-        ImageCodec.SavePng(composite, stream);
+        return composite;
     }
 
     private static int IndexOf(PaintDocument document, Guid? id)
