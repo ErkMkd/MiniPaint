@@ -38,6 +38,11 @@ public partial class MainWindow : Window
             if (Vm.ActiveWorkspace is { } ws)
                 ws.FitToWindow(Canvas.Bounds.Width, Canvas.Bounds.Height);
         };
+        Vm.FitAllRequested += () =>
+        {
+            foreach (var tab in Vm.Tabs)
+                tab.Workspace.FitToWindow(Canvas.Bounds.Width, Canvas.Bounds.Height);
+        };
         Vm.Zoom100Requested += () =>
         {
             if (Vm.ActiveWorkspace is { } ws)
@@ -153,6 +158,8 @@ public partial class MainWindow : Window
         if (ctrl && alt && e.Key == Key.T) { vm.SetToolSelectionEditCommand.Execute(null); e.Handled = true; }
         else if (ctrl && alt && e.Key == Key.I) { vm.ImageSizeCommand.Execute(null); e.Handled = true; }
         else if (ctrl && alt && e.Key == Key.C) { vm.CanvasSizeCommand.Execute(null); e.Handled = true; }
+        else if (ctrl && e.KeyModifiers.HasFlag(KeyModifiers.Shift) && e.Key == Key.I)
+        { vm.InverseSelectionCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.KeyModifiers.HasFlag(KeyModifiers.Shift) && e.Key == Key.M)
         { vm.ImageModeCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.KeyModifiers.HasFlag(KeyModifiers.Shift) && e.Key == Key.P)
@@ -173,6 +180,7 @@ public partial class MainWindow : Window
         else if (ctrl && e.Key == Key.D1) { vm.Zoom100Command.Execute(null); e.Handled = true; }
         else if (e.Key == Key.V && !vm.IsTransforming) { vm.SetToolSelectCommand.Execute(null); e.Handled = true; }
         else if (e.Key == Key.M && !vm.IsTransforming) { vm.SetToolMoveCommand.Execute(null); e.Handled = true; }
+        else if (e.Key == Key.W && !vm.IsTransforming) { vm.SetToolMagicWandCommand.Execute(null); e.Handled = true; }
         else if (e.Key == Key.H && !vm.IsTransforming) { vm.SetToolPanCommand.Execute(null); e.Handled = true; }
     }
 

@@ -17,6 +17,7 @@ public enum CanvasTool
 {
     Pan,
     RectSelect,
+    MagicWand,
     SelectionEdit,
     MoveLayer,
     FreeTransform
@@ -33,9 +34,17 @@ public sealed class ImageCanvas : Control
     public static readonly StyledProperty<CanvasTool> ToolProperty =
         AvaloniaProperty.Register<ImageCanvas, CanvasTool>(nameof(Tool), CanvasTool.RectSelect);
 
+    /// <summary>Options-bar mode for selection tools; Shift / Alt held at click time override it.</summary>
+    public static readonly StyledProperty<SelectionCombineMode> SelectionModeProperty =
+        AvaloniaProperty.Register<ImageCanvas, SelectionCombineMode>(nameof(SelectionMode));
+
+    public static readonly StyledProperty<MagicWandOptions> WandOptionsProperty =
+        AvaloniaProperty.Register<ImageCanvas, MagicWandOptions>(nameof(WandOptions), new MagicWandOptions());
+
     private WriteableBitmap? _bitmap;
+    /// <summary>Workspace + composite version currently uploaded into <see cref="_bitmap"/>.</summary>
+    private DocumentWorkspace? _bitmapWorkspace;
     private int _bitmapVersion = -1;
-    private int _cacheVersion;
     private bool _panning;
     private bool _spaceDown;
     private bool _selecting;
@@ -49,6 +58,25 @@ public sealed class ImageCanvas : Control
     private int _layerStartOx, _layerStartOy;
     private DispatcherTimer? _antsTimer;
     private double _antsPhase;
+
+    /// <summary>Marquee being dragged (doc coords) and how it combines with the selection on release.</summary>
+    private int _selCurX, _selCurY;
+    private SelectionCombineMode _selectMode;
+    /// <summary>Selection before a Rectangular Selection gesture; the gesture is one undo step.</summary>
+    private SelectionSnapshot? _selBefore;
+    private string _selGestureName = "";
+    private SelectionSnapshot? _floatSelBefore;
+
+    /// <summary>Above this many outline segments the ants stop animating (redraw cost).</summary>
+    private const int AntsAnimationSegmentLimit = 20_000;
+    private SelectionState? _outlineSelection;
+    private int _outlineShapeVersion = -1;
+    private int _outlineCellSize;
+    /// <summary>Outline segments of the selection shape, relative to its top-left corner.</summary>
+    private IReadOnlyList<ContourSegment> _outlineSegments = [];
+    private StreamGeometry? _outlineGeometry;
+    private int _outlineVisibleCount;
+    private (int selX, int selY, double zoom, double panX, double panY, Size bounds) _outlineView;
 
     /// <summary>Lifted selection pixels dragged with the marquee (Move tool).</summary>
     private PixelBuffer? _floatingPixels;
@@ -74,6 +102,18 @@ public sealed class ImageCanvas : Control
         set => SetValue(ToolProperty, value);
     }
 
+    public SelectionCombineMode SelectionMode
+    {
+        get => GetValue(SelectionModeProperty);
+        set => SetValue(SelectionModeProperty, value);
+    }
+
+    public MagicWandOptions WandOptions
+    {
+        get => GetValue(WandOptionsProperty);
+        set => SetValue(WandOptionsProperty, value);
+    }
+
     public event Action? StatusChanged;
     public event Action? TransformModeChanged;
 
@@ -93,9 +133,12 @@ public sealed class ImageCanvas : Control
         _antsTimer.Tick += (_, _) =>
         {
             _antsPhase = (_antsPhase + 1) % 16;
-            if (Workspace?.Selection.HasSelection == true ||
-                Workspace?.IsTransforming == true ||
-                Workspace?.IsEditingSelection == true)
+            var ws = Workspace;
+            if (_selecting ||
+                ws?.IsTransforming == true ||
+                ws?.IsEditingSelection == true ||
+                (ws?.Selection.HasSelection == true &&
+                 (ws.Selection.IsRectangular || _outlineVisibleCount <= AntsAnimationSegmentLimit)))
                 InvalidateVisual();
         };
         _antsTimer.Start();
@@ -111,7 +154,6 @@ public sealed class ImageCanvas : Control
             if (change.NewValue is DocumentWorkspace newWs)
             {
                 newWs.Changed += OnWorkspaceChanged;
-                _cacheVersion++;
             }
             InvalidateVisual();
             StatusChanged?.Invoke();
@@ -120,7 +162,6 @@ public sealed class ImageCanvas : Control
 
     private void OnWorkspaceChanged()
     {
-        _cacheVersion++;
         InvalidateVisual();
         StatusChanged?.Invoke();
         TransformModeChanged?.Invoke();
@@ -128,7 +169,7 @@ public sealed class ImageCanvas : Control
 
     public void InvalidateComposite()
     {
-        _cacheVersion++;
+        Workspace?.InvalidateComposite();
         InvalidateVisual();
     }
 
@@ -266,33 +307,52 @@ public sealed class ImageCanvas : Control
             return;
         }
 
+        if (Tool == CanvasTool.MagicWand)
+        {
+            var (docX, docY) = ws.ScreenToDocument(p.X, p.Y);
+            try
+            {
+                ws.MagicWandSelect(docX, docY, WandOptions, CombineModeFrom(e.KeyModifiers));
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error("Magic Wand failed", ex);
+            }
+            e.Handled = true;
+            InvalidateVisual();
+            StatusChanged?.Invoke();
+            return;
+        }
+
         if (Tool == CanvasTool.RectSelect)
         {
             var (docX, docY) = ws.ScreenToDocument(p.X, p.Y);
-            // Photoshop: existing selection → drag inside moves it; new marquee requires Deselect first.
-            if (ws.Selection.HasSelection)
-            {
-                if (ws.Selection.Contains(docX, docY))
-                {
-                    _movingSelection = true;
-                    _selMoveStartDocX = docX;
-                    _selMoveStartDocY = docY;
-                    _selMoveOriginX = ws.Selection.X;
-                    _selMoveOriginY = ws.Selection.Y;
-                    e.Pointer.Capture(this);
-                    e.Handled = true;
-                    return;
-                }
+            var mode = CombineModeFrom(e.KeyModifiers);
+            _selBefore = ws.Selection.Capture();
 
-                // Click outside: do not start a new selection while one exists.
+            // Photoshop: plain drag inside the selection moves the outline (pixels stay).
+            if (mode == SelectionCombineMode.Replace && ws.Selection.Contains(docX, docY))
+            {
+                _selGestureName = "Move Selection Outline";
+                _movingSelection = true;
+                _selMoveStartDocX = docX;
+                _selMoveStartDocY = docY;
+                _selMoveOriginX = ws.Selection.X;
+                _selMoveOriginY = ws.Selection.Y;
+                e.Pointer.Capture(this);
                 e.Handled = true;
                 return;
             }
 
+            // New marquee. Replace drops the old selection now (so a click without drag deselects);
+            // Shift / Alt / Shift+Alt combine with it on release.
+            _selGestureName = "Rectangular Marquee";
+            _selectMode = mode;
+            if (mode == SelectionCombineMode.Replace)
+                ws.Selection.Clear();
             _selecting = true;
-            _selStartX = docX;
-            _selStartY = docY;
-            ws.Selection.Set(_selStartX, _selStartY, 0, 0);
+            _selStartX = _selCurX = docX;
+            _selStartY = _selCurY = docY;
             e.Pointer.Capture(this);
             e.Handled = true;
             InvalidateVisual();
@@ -340,12 +400,12 @@ public sealed class ImageCanvas : Control
             return false;
         }
 
+        _floatSelBefore = ws.Selection.Capture();
         _floatingBefore = before;
         _floatingPixels = lifted;
         _floatingLayer = layer;
         RebuildFloatingBitmap();
         ws.InvalidateComposite();
-        _cacheVersion++;
 
         _movingSelection = true;
         _selMoveStartDocX = docX;
@@ -367,8 +427,7 @@ public sealed class ImageCanvas : Control
         _floatingBitmap = new WriteableBitmap(size, new Vector(96, 96),
             Avalonia.Platform.PixelFormat.Rgba8888, Avalonia.Platform.AlphaFormat.Unpremul);
         using var fb = _floatingBitmap.Lock();
-        var src = _floatingPixels.PixelsReadOnly;
-        System.Runtime.InteropServices.Marshal.Copy(src.ToArray(), 0, fb.Address, src.Length);
+        _floatingPixels.CopyTo(fb.Address, fb.RowBytes);
     }
 
     private void CommitFloatingSelection(DocumentWorkspace ws)
@@ -389,7 +448,6 @@ public sealed class ImageCanvas : Control
             _floatingLayer.ReplacePixels(_floatingBefore.Clone());
             ClearFloatingState();
             ws.InvalidateComposite();
-            _cacheVersion++;
             ws.NotifyChanged();
             return;
         }
@@ -414,10 +472,16 @@ public sealed class ImageCanvas : Control
             ws.Selection.X,
             ws.Selection.Y);
         ws.Document.IsDirty = true;
+        ws.Selection.ClampToDocument(ws.Document.Width, ws.Document.Height);
 
+        // Pixels and marquee move together, so one undo puts both back.
         var after = _floatingLayer.Pixels.Clone();
-        ws.History.Record(new LayerPixelsCommand(
-            "Move Selection", _floatingLayer, _floatingBefore, after, ws.NotifyChanged));
+        IEditCommand pixels = new LayerPixelsCommand(
+            "Move Selection", _floatingLayer, _floatingBefore, after, ws.NotifyChanged);
+        ws.History.Record(_floatSelBefore is null
+            ? pixels
+            : new CompoundCommand("Move Selection", pixels,
+                new SelectionCommand("Move Selection", ws.Selection, _floatSelBefore, ws.Selection.Capture())));
         _floatingBefore = null;
         ClearFloatingState(disposeBefore: false);
         ws.NotifyChanged();
@@ -430,9 +494,10 @@ public sealed class ImageCanvas : Control
             _floatingLayer.ReplacePixels(_floatingBefore.Clone());
             if (ws is not null)
             {
-                ws.Selection.Set(_selMoveOriginX, _selMoveOriginY,
-                    _floatingPixels?.Width ?? ws.Selection.Width,
-                    _floatingPixels?.Height ?? ws.Selection.Height);
+                if (_floatSelBefore is not null)
+                    ws.Selection.Restore(_floatSelBefore);
+                else
+                    ws.Selection.MoveTo(_selMoveOriginX, _selMoveOriginY);
                 ws.NotifyChanged();
             }
         }
@@ -453,6 +518,7 @@ public sealed class ImageCanvas : Control
         _floatingBitmap?.Dispose();
         _floatingBitmap = null;
         _floatingLayer = null;
+        _floatSelBefore = null;
     }
 
     private void BeginSelectionEditInteraction(DocumentWorkspace ws, Point p, KeyModifiers mods)
@@ -476,7 +542,7 @@ public sealed class ImageCanvas : Control
             return;
         }
 
-        if (hit == TransformHandle.Move || ws.Selection.ContainsDoc(cdx, cdy))
+        if (hit == TransformHandle.Move || ws.Selection.BoundsContainDoc(cdx, cdy))
         {
             _movingSelection = true;
             var (docX, docY) = ws.ScreenToDocument(p.X, p.Y);
@@ -634,7 +700,7 @@ public sealed class ImageCanvas : Control
             var (x, y) = ws.ScreenToDocument(p.X, p.Y);
             int nx = _selMoveOriginX + (x - _selMoveStartDocX);
             int ny = _selMoveOriginY + (y - _selMoveStartDocY);
-            ws.Selection.Set(nx, ny, ws.Selection.Width, ws.Selection.Height);
+            ws.Selection.MoveTo(nx, ny);
             InvalidateVisual();
             StatusChanged?.Invoke();
             e.Handled = true;
@@ -643,8 +709,7 @@ public sealed class ImageCanvas : Control
 
         if (_selecting)
         {
-            var (x, y) = ws.ScreenToDocument(p.X, p.Y);
-            ws.Selection.Set(_selStartX, _selStartY, x - _selStartX, y - _selStartY);
+            (_selCurX, _selCurY) = ws.ScreenToDocument(p.X, p.Y);
             InvalidateVisual();
             StatusChanged?.Invoke();
             e.Handled = true;
@@ -681,6 +746,10 @@ public sealed class ImageCanvas : Control
         else if (Tool == CanvasTool.MoveLayer)
         {
             Cursor = new Cursor(StandardCursorType.SizeAll);
+        }
+        else if (Tool == CanvasTool.MagicWand)
+        {
+            Cursor = new Cursor(StandardCursorType.Cross);
         }
     }
 
@@ -720,12 +789,19 @@ public sealed class ImageCanvas : Control
         if (_floatingPixels is not null && ws is not null)
             CommitFloatingSelection(ws);
 
+        if (_selecting && ws is not null)
+            ApplyMarquee(ws);
+
         if ((_selecting || _movingSelection || _selScaleIx is not null) && ws is not null)
         {
             ws.Selection.ClampToDocument(ws.Document.Width, ws.Document.Height);
+            // Rectangular Selection gestures are one undo step each (Transform Selection records on Apply).
+            if (_selBefore is not null)
+                ws.RecordSelectionChange(_selGestureName, _selBefore);
             InvalidateVisual();
             StatusChanged?.Invoke();
         }
+        _selBefore = null;
 
         if (_movingLayer && ws?.Document.ActiveLayer is { } layer)
         {
@@ -750,6 +826,29 @@ public sealed class ImageCanvas : Control
         _activeHandle = TransformHandle.None;
         e.Pointer.Capture(null);
         base.OnPointerReleased(e);
+    }
+
+    private SelectionCombineMode CombineModeFrom(KeyModifiers mods)
+    {
+        bool shift = mods.HasFlag(KeyModifiers.Shift);
+        bool alt = mods.HasFlag(KeyModifiers.Alt);
+        return (shift, alt) switch
+        {
+            (true, true) => SelectionCombineMode.Intersect,
+            (true, false) => SelectionCombineMode.Add,
+            (false, true) => SelectionCombineMode.Subtract,
+            _ => SelectionMode
+        };
+    }
+
+    /// <summary>Combine the dragged marquee into the selection (a click without drag adds nothing).</summary>
+    private void ApplyMarquee(DocumentWorkspace ws)
+    {
+        var marquee = new SelectionState();
+        marquee.Set(_selStartX, _selStartY, _selCurX - _selStartX, _selCurY - _selStartY);
+        marquee.ClampToDocument(ws.Document.Width, ws.Document.Height);
+        if (marquee.HasSelection)
+            ws.Selection.Combine(marquee, _selectMode);
     }
 
     private void UpdateCursorDoc(Point p)
@@ -793,6 +892,9 @@ public sealed class ImageCanvas : Control
             DrawSelectionEditOverlay(context, ws, edit);
         else if (ws.Selection.HasSelection)
             DrawMarchingAnts(context, ws);
+
+        if (_selecting)
+            DrawMarquee(context, ws);
     }
 
     private void DrawFloatingSelection(DrawingContext context, DocumentWorkspace ws)
@@ -822,14 +924,14 @@ public sealed class ImageCanvas : Control
 
     private void EnsureBitmap(DocumentWorkspace ws)
     {
-        if (_bitmap is not null &&
-            _bitmap.PixelSize.Width == ws.Document.Width &&
-            _bitmap.PixelSize.Height == ws.Document.Height &&
-            _bitmapVersion == _cacheVersion)
-            return;
-
+        // GetComposite is cached: selection, zoom and pan changes reuse the uploaded bitmap;
+        // only a recomputed composite (new CompositeVersion) is copied again.
         var composite = ws.GetComposite();
         var size = new PixelSize(composite.Width, composite.Height);
+        if (_bitmap is not null && _bitmap.PixelSize == size &&
+            ReferenceEquals(_bitmapWorkspace, ws) && _bitmapVersion == ws.CompositeVersion)
+            return;
+
         if (_bitmap is null || _bitmap.PixelSize != size)
         {
             _bitmap?.Dispose();
@@ -838,39 +940,73 @@ public sealed class ImageCanvas : Control
         }
 
         using (var fb = _bitmap.Lock())
-        {
-            var src = composite.PixelsReadOnly;
-            System.Runtime.InteropServices.Marshal.Copy(src.ToArray(), 0, fb.Address, src.Length);
-        }
+            composite.CopyTo(fb.Address, fb.RowBytes);
 
-        _bitmapVersion = _cacheVersion;
+        _bitmapWorkspace = ws;
+        _bitmapVersion = ws.CompositeVersion;
     }
 
+    private const int CheckerLight = unchecked((int)0xFF555555);
+    private const int CheckerDark = unchecked((int)0xFF3A3A3A);
+    private WriteableBitmap? _checkerBitmap;
+    private (int x, int y, int w, int h, double scale, double cell, double panX, double panY) _checkerKey;
+
+    /// <summary>
+    /// Transparency checkerboard (8 document px cells, at least 2 screen px) under the visible part
+    /// of the document. Rendered into a cached bitmap at device resolution and rebuilt only when
+    /// zoom, pan or size change — redrawing it cell by cell cost tens of thousands of rectangles per frame.
+    /// </summary>
     private void DrawCheckerboard(DrawingContext context, DocumentWorkspace ws)
     {
         double z = ws.Zoom;
-        var dest = new Rect(ws.PanX, ws.PanY, ws.Document.Width * z, ws.Document.Height * z);
-        const int cell = 8;
-        var light = new SolidColorBrush(Color.FromRgb(0x55, 0x55, 0x55));
-        var dark = new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x3A));
-        context.FillRectangle(dark, dest);
+        var docRect = new Rect(ws.PanX, ws.PanY, ws.Document.Width * z, ws.Document.Height * z);
+        var visible = docRect.Intersect(new Rect(Bounds.Size));
+        if (visible.Width <= 0 || visible.Height <= 0) return;
 
-        double screenCell = Math.Max(2, cell * z);
-        int cols = (int)Math.Ceiling(dest.Width / screenCell);
-        int rows = (int)Math.Ceiling(dest.Height / screenCell);
-        for (int y = 0; y < rows; y++)
+        int x0 = (int)Math.Floor(visible.X);
+        int y0 = (int)Math.Floor(visible.Y);
+        int w = (int)Math.Ceiling(visible.Right) - x0;
+        int h = (int)Math.Ceiling(visible.Bottom) - y0;
+        double scale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
+        double cell = Math.Max(2, 8 * z);
+
+        var key = (x0, y0, w, h, scale, cell, ws.PanX, ws.PanY);
+        if (_checkerBitmap is null || _checkerKey != key)
         {
-            for (int x = 0; x < cols; x++)
-            {
-                if (((x + y) & 1) == 0) continue;
-                var r = new Rect(
-                    dest.X + x * screenCell,
-                    dest.Y + y * screenCell,
-                    Math.Min(screenCell, dest.Right - (dest.X + x * screenCell)),
-                    Math.Min(screenCell, dest.Bottom - (dest.Y + y * screenCell)));
-                if (r.Width > 0 && r.Height > 0)
-                    context.FillRectangle(light, r);
-            }
+            RenderCheckerboard(x0, y0, w, h, scale, cell, ws.PanX, ws.PanY);
+            _checkerKey = key;
+        }
+
+        using (context.PushClip(visible))
+            context.DrawImage(_checkerBitmap!,
+                new Rect(0, 0, _checkerBitmap!.PixelSize.Width, _checkerBitmap.PixelSize.Height),
+                new Rect(x0, y0, w, h));
+    }
+
+    private void RenderCheckerboard(int x0, int y0, int w, int h, double scale, double cell, double panX, double panY)
+    {
+        int pw = Math.Max(1, (int)Math.Ceiling(w * scale));
+        int ph = Math.Max(1, (int)Math.Ceiling(h * scale));
+        if (_checkerBitmap is null || _checkerBitmap.PixelSize != new PixelSize(pw, ph))
+        {
+            _checkerBitmap?.Dispose();
+            _checkerBitmap = new WriteableBitmap(new PixelSize(pw, ph), new Vector(96 * scale, 96 * scale),
+                Avalonia.Platform.PixelFormat.Bgra8888, Avalonia.Platform.AlphaFormat.Premul);
+        }
+
+        // Cell index of each device-pixel column, measured from the document origin on screen.
+        var columnCell = new int[pw];
+        for (int px = 0; px < pw; px++)
+            columnCell[px] = (int)Math.Floor((x0 + (px + 0.5) / scale - panX) / cell);
+
+        var row = new int[pw];
+        using var fb = _checkerBitmap.Lock();
+        for (int py = 0; py < ph; py++)
+        {
+            int rowCell = (int)Math.Floor((y0 + (py + 0.5) / scale - panY) / cell);
+            for (int px = 0; px < pw; px++)
+                row[px] = ((columnCell[px] + rowCell) & 1) == 0 ? CheckerDark : CheckerLight;
+            System.Runtime.InteropServices.Marshal.Copy(row, 0, fb.Address + py * fb.RowBytes, pw);
         }
     }
 
@@ -924,18 +1060,113 @@ public sealed class ImageCanvas : Control
     private void DrawMarchingAnts(DrawingContext context, DocumentWorkspace ws)
     {
         var sel = ws.Selection;
-        double x = ws.PanX + sel.X * ws.Zoom;
-        double y = ws.PanY + sel.Y * ws.Zoom;
-        double w = sel.Width * ws.Zoom;
-        double h = sel.Height * ws.Zoom;
-        var rect = new Rect(x, y, w, h);
+        var bounds = DocToScreen(ws, sel.X, sel.Y, sel.Width, sel.Height);
+        if (sel.IsRectangular)
+        {
+            DrawAntsRect(context, bounds);
+            return;
+        }
 
+        var geometry = GetOutlineGeometry(ws);
+        if (geometry is null)
+        {
+            // Nothing is ≥ 50% selected (very soft mask): show the bounds instead.
+            DrawAntsRect(context, bounds);
+            return;
+        }
+
+        context.DrawGeometry(null, new Pen(Brushes.Black, 1), geometry);
+        context.DrawGeometry(null, new Pen(Brushes.White, 1)
+        {
+            DashStyle = new DashStyle(new double[] { 4, 4 }, _antsPhase)
+        }, geometry);
+    }
+
+    /// <summary>
+    /// Outline of a masked selection in screen coordinates. Segments are recomputed only when the
+    /// shape changes (not while it is dragged); the geometry is rebuilt when position, zoom or pan change.
+    /// </summary>
+    private StreamGeometry? GetOutlineGeometry(DocumentWorkspace ws)
+    {
+        var sel = ws.Selection;
+        int cellSize = OutlineCellSize(ws.Zoom);
+        if (!ReferenceEquals(_outlineSelection, sel) || _outlineShapeVersion != sel.ShapeVersion ||
+            _outlineCellSize != cellSize)
+        {
+            _outlineSegments = SelectionContour.Build(sel, cellSize)
+                .Select(s => new ContourSegment(s.X0 - sel.X, s.Y0 - sel.Y, s.X1 - sel.X, s.Y1 - sel.Y))
+                .ToList();
+            _outlineSelection = sel;
+            _outlineShapeVersion = sel.ShapeVersion;
+            _outlineCellSize = cellSize;
+            _outlineGeometry = null;
+        }
+        if (_outlineSegments.Count == 0)
+            return null;
+
+        var view = (sel.X, sel.Y, ws.Zoom, ws.PanX, ws.PanY, Bounds.Size);
+        if (_outlineGeometry is not null && _outlineView == view)
+            return _outlineGeometry;
+
+        // Only segments on screen go into the geometry (zoomed-in fragmented selections).
+        double ox = ws.PanX + sel.X * ws.Zoom;
+        double oy = ws.PanY + sel.Y * ws.Zoom;
+        double right = Bounds.Width + 1;
+        double bottom = Bounds.Height + 1;
+        int visible = 0;
+        var geometry = new StreamGeometry();
+        using (var g = geometry.Open())
+        {
+            foreach (var s in _outlineSegments)
+            {
+                double x0 = ox + s.X0 * ws.Zoom, y0 = oy + s.Y0 * ws.Zoom;
+                double x1 = ox + s.X1 * ws.Zoom, y1 = oy + s.Y1 * ws.Zoom;
+                if (Math.Max(x0, x1) < -1 || Math.Min(x0, x1) > right ||
+                    Math.Max(y0, y1) < -1 || Math.Min(y0, y1) > bottom)
+                    continue;
+                g.BeginFigure(new Point(x0, y0), false);
+                g.LineTo(new Point(x1, y1));
+                g.EndFigure(false);
+                visible++;
+            }
+        }
+        _outlineGeometry = geometry;
+        _outlineView = view;
+        _outlineVisibleCount = visible;
+        return geometry;
+    }
+
+    /// <summary>Zoomed out, trace the outline on cells of about one screen pixel (power of two).</summary>
+    private static int OutlineCellSize(double zoom)
+    {
+        int cell = 1;
+        while (cell < 64 && cell * 2 <= 1.0 / zoom)
+            cell *= 2;
+        return cell;
+    }
+
+    /// <summary>Rectangle being dragged with Rectangular Selection.</summary>
+    private void DrawMarquee(DrawingContext context, DocumentWorkspace ws)
+    {
+        int x0 = Math.Min(_selStartX, _selCurX);
+        int y0 = Math.Min(_selStartY, _selCurY);
+        int w = Math.Abs(_selCurX - _selStartX);
+        int h = Math.Abs(_selCurY - _selStartY);
+        if (w == 0 || h == 0) return;
+        DrawAntsRect(context, DocToScreen(ws, x0, y0, w, h));
+    }
+
+    private void DrawAntsRect(DrawingContext context, Rect rect)
+    {
         context.DrawRectangle(null, new Pen(Brushes.Black, 1), rect);
         context.DrawRectangle(null, new Pen(Brushes.White, 1)
         {
             DashStyle = new DashStyle(new double[] { 4, 4 }, _antsPhase)
         }, rect);
     }
+
+    private static Rect DocToScreen(DocumentWorkspace ws, double x, double y, double width, double height) =>
+        new(ws.PanX + x * ws.Zoom, ws.PanY + y * ws.Zoom, width * ws.Zoom, height * ws.Zoom);
 
     private void DrawSelectionEditOverlay(DrawingContext context, DocumentWorkspace ws, SelectionEditSession edit)
     {
@@ -964,6 +1195,9 @@ public sealed class ImageCanvas : Control
         _antsTimer?.Stop();
         _bitmap?.Dispose();
         _bitmap = null;
+        _bitmapWorkspace = null;
+        _checkerBitmap?.Dispose();
+        _checkerBitmap = null;
         ClearFloatingState();
         base.OnDetachedFromVisualTree(e);
     }

@@ -1,0 +1,73 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:MiniPaint.App.ViewModels"
+        x:Class="MiniPaint.App.Views.ColorRangeWindow"
+        x:DataType="vm:ColorRangeViewModel"
+        Width="540" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="#2D2D30"
+        Foreground="#DDDDDD"
+        Title="{Binding Title}">
+
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="OK" Width="88" IsDefault="True" IsEnabled="{Binding HasColors}" Click="OnOkClick" />
+      <Button Content="Cancel" Width="88" IsCancel="True" Click="OnCancelClick" />
+    </StackPanel>
+
+    <StackPanel Spacing="10">
+      <TextBlock Text="Click the preview to pick a color · Shift+click adds a color · Alt+click removes one."
+                 TextWrapping="Wrap" Foreground="#AAA" FontSize="12" />
+
+      <Border Background="#1E1E1E" BorderBrush="#3F3F46" BorderThickness="1" HorizontalAlignment="Center">
+        <Image Source="{Binding Preview}"
+               Width="{Binding PreviewWidth}" Height="{Binding PreviewHeight}"
+               Stretch="Fill" Cursor="Cross"
+               PointerPressed="OnPreviewPointerPressed" />
+      </Border>
+
+      <StackPanel Orientation="Horizontal" Spacing="16" HorizontalAlignment="Center">
+        <RadioButton GroupName="ColorRangePreview" Content="Selection" IsChecked="{Binding ShowSelectionPreview}" />
+        <RadioButton GroupName="ColorRangePreview" Content="Image" IsChecked="{Binding ShowImagePreview}" />
+      </StackPanel>
+
+      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+        <TextBlock Text="Fuzziness" VerticalAlignment="Center" />
+        <Slider Grid.Column="1" Minimum="0" Maximum="255" TickFrequency="1" IsSnapToTickEnabled="True"
+                VerticalAlignment="Center"
+                Value="{Binding FuzzinessSliderValue, Mode=TwoWay}" />
+        <NumericUpDown Grid.Column="2" Width="110" Minimum="0" Maximum="255" Increment="1" FormatString="0"
+                       Value="{Binding FuzzinessValue}" />
+      </Grid>
+      <TextBlock Text="0 = exact colors only. Colors within half the fuzziness are fully selected, then fade out."
+                 TextWrapping="Wrap" Foreground="#888" FontSize="11" />
+
+      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+        <TextBlock Text="Sampled" VerticalAlignment="Center" />
+        <ItemsControl Grid.Column="1" ItemsSource="{Binding Swatches}">
+          <ItemsControl.ItemsPanel>
+            <ItemsPanelTemplate>
+              <WrapPanel />
+            </ItemsPanelTemplate>
+          </ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:ColorSwatch">
+              <Border Width="20" Height="20" Margin="0,2,4,2" BorderThickness="2"
+                      Background="{Binding Fill}" BorderBrush="{Binding Outline}"
+                      ToolTip.Tip="{Binding Tip}" />
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </Grid>
+      <TextBlock Text="{Binding StatusText}" Foreground="#888" FontSize="11" />
+
+      <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+        <TextBlock Text="Result" VerticalAlignment="Center" />
+        <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                  ItemsSource="{Binding Modes}"
+                  SelectedItem="{Binding SelectedMode}" />
+      </Grid>
+    </StackPanel>
+  </DockPanel>
+</Window>

@@ -16,6 +16,9 @@ public sealed class HistoryStack
     public string? UndoName => CanUndo ? _undo[^1].Name : null;
     public string? RedoName => CanRedo ? _redo[^1].Name : null;
 
+    /// <summary>The command recorded, executed, undone or redone by the latest change (null after Clear).</summary>
+    public IEditCommand? LastAffected { get; private set; }
+
     public event Action? Changed;
 
     public void Execute(IEditCommand command)
@@ -40,6 +43,7 @@ public sealed class HistoryStack
         if (_undo.Count > _limit)
             _undo.RemoveAt(0);
         _redo.Clear();
+        LastAffected = command;
         Changed?.Invoke();
     }
 
@@ -50,6 +54,7 @@ public sealed class HistoryStack
         _undo.RemoveAt(_undo.Count - 1);
         cmd.Undo();
         _redo.Add(cmd);
+        LastAffected = cmd;
         Changed?.Invoke();
     }
 
@@ -60,6 +65,7 @@ public sealed class HistoryStack
         _redo.RemoveAt(_redo.Count - 1);
         cmd.Execute();
         _undo.Add(cmd);
+        LastAffected = cmd;
         Changed?.Invoke();
     }
 
@@ -67,6 +73,7 @@ public sealed class HistoryStack
     {
         _undo.Clear();
         _redo.Clear();
+        LastAffected = null;
         Changed?.Invoke();
     }
 }

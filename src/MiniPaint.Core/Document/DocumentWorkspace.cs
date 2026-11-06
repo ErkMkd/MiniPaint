@@ -21,7 +21,9 @@ public sealed class DocumentWorkspace : IDisposable
     /// <summary>Source layer when Free Transform is lifting a selection (float is not in Layers).</summary>
     private Layer? _selectionTransformSource;
     private PixelBuffer? _selectionTransformBefore;
-    private int _selectionOriginX, _selectionOriginY, _selectionOriginW, _selectionOriginH;
+    private SelectionSnapshot? _selectionBeforeTransform;
+    /// <summary>Selection coverage as an RGBA buffer, baked with the float so the marquee follows it.</summary>
+    private PixelBuffer? _selectionTransformMask;
 
     public PaintDocument Document { get; }
     public SelectionState Selection { get; } = new();
@@ -41,12 +43,24 @@ public sealed class DocumentWorkspace : IDisposable
 
     public string TabTitle => Document.IsDirty ? Document.Name + "*" : Document.Name;
 
+    /// <summary>Incremented each time <see cref="GetComposite"/> recomputes the image (the canvas re-uploads only then).</summary>
+    public int CompositeVersion { get; private set; }
+
     public event Action? Changed;
 
     public DocumentWorkspace(PaintDocument document)
     {
         Document = document ?? throw new ArgumentNullException(nameof(document));
-        History.Changed += () => NotifyChanged();
+        History.Changed += OnHistoryChanged;
+    }
+
+    private void OnHistoryChanged()
+    {
+        // Selection-only steps leave pixels alone: no recomposite, document stays saved.
+        if (History.LastAffected is SelectionCommand)
+            Changed?.Invoke();
+        else
+            NotifyChanged();
     }
 
     public void NotifyChanged()
@@ -90,6 +104,7 @@ public sealed class DocumentWorkspace : IDisposable
             if (Document.ColorSettings.Mode != ColorModeKind.Rgba)
                 ColorModePipeline.ApplyInPlace(_compositeCache, Document.ColorSettings);
             _compositeDirty = false;
+            CompositeVersion++;
         }
 
         return _compositeCache;
@@ -178,8 +193,9 @@ public sealed class DocumentWorkspace : IDisposable
 
     public void SelectAll()
     {
+        var before = Selection.Capture();
         Selection.SelectAll(Document.Width, Document.Height);
-        Changed?.Invoke();
+        RecordSelectionChange("Select All", before);
     }
 
     public void Deselect()
@@ -187,8 +203,80 @@ public sealed class DocumentWorkspace : IDisposable
         if (IsTransforming) return;
         if (IsEditingSelection)
             CancelSelectionEdit();
+        var before = Selection.Capture();
         Selection.Clear();
-        Changed?.Invoke();
+        RecordSelectionChange("Deselect", before);
+    }
+
+    public void InvertSelection()
+    {
+        if (IsTransforming || !Selection.HasSelection) return;
+        if (IsEditingSelection)
+            CancelSelectionEdit();
+        var before = Selection.Capture();
+        Selection.Invert(Document.Width, Document.Height);
+        RecordSelectionChange("Inverse", before);
+    }
+
+    /// <summary>
+    /// Magic Wand click at a document pixel, combined with the current selection (one undo step).
+    /// </summary>
+    public void MagicWandSelect(int docX, int docY, MagicWandOptions options, SelectionCombineMode mode)
+    {
+        if (IsTransforming) return;
+        if ((uint)docX >= (uint)Document.Width || (uint)docY >= (uint)Document.Height) return;
+        if (IsEditingSelection)
+            CancelSelectionEdit();
+
+        SelectionState picked;
+        if (options.SampleVisibleImage)
+        {
+            picked = MagicWand.Select(GetComposite(), docX, docY, options);
+        }
+        else
+        {
+            var layer = Document.ActiveLayer;
+            if (layer is null) return;
+            using var layerOnCanvas = PixelOps.ExtractRegion(
+                layer.Pixels, layer.OffsetX, layer.OffsetY, 0, 0, Document.Width, Document.Height);
+            picked = MagicWand.Select(layerOnCanvas, docX, docY, options);
+        }
+
+        var before = Selection.Capture();
+        Selection.Combine(picked, mode);
+        RecordSelectionChange("Magic Wand", before);
+    }
+
+    /// <summary>
+    /// Select → Color Range on the visible image, combined with the current selection (one undo step).
+    /// </summary>
+    public void ColorRangeSelect(ColorRangeOptions options, SelectionCombineMode mode)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (IsTransforming) return;
+        if (IsEditingSelection)
+            CancelSelectionEdit();
+
+        var picked = ColorRange.Select(GetComposite(), options);
+        var before = Selection.Capture();
+        Selection.Combine(picked, mode);
+        RecordSelectionChange("Color Range", before);
+    }
+
+    /// <summary>
+    /// Record the selection change made since <paramref name="before"/> as one undo step
+    /// (nothing is recorded when the selection did not actually change).
+    /// </summary>
+    public void RecordSelectionChange(string name, SelectionSnapshot before)
+    {
+        ArgumentNullException.ThrowIfNull(before);
+        var after = Selection.Capture();
+        if (after.SameAs(before))
+        {
+            Changed?.Invoke();
+            return;
+        }
+        History.Record(new SelectionCommand(name, Selection, before, after));
     }
 
     public bool BeginSelectionEdit()
@@ -205,8 +293,9 @@ public sealed class DocumentWorkspace : IDisposable
     {
         if (ActiveSelectionEdit is null) return;
         Selection.ClampToDocument(Document.Width, Document.Height);
+        var before = ActiveSelectionEdit.Original;
         ActiveSelectionEdit = null;
-        Changed?.Invoke();
+        RecordSelectionChange("Transform Selection", before);
     }
 
     public void CancelSelectionEdit()
@@ -220,6 +309,11 @@ public sealed class DocumentWorkspace : IDisposable
     public void ExportPng(string path)
     {
         ProjectSerializer.ExportPng(Document, path);
+    }
+
+    public void ExportJpeg(string path, int quality)
+    {
+        ProjectSerializer.ExportJpeg(Document, path, quality);
     }
 
     public void SaveProject(string path)
@@ -251,17 +345,17 @@ public sealed class DocumentWorkspace : IDisposable
     private bool BeginSelectionTransform(Layer sourceLayer)
     {
         var before = sourceLayer.Pixels.Clone();
+        var mask = SelectionOps.MaskToPixelBuffer(Selection);
         var lifted = SelectionOps.CutFromActiveLayer(Document, Selection);
         if (lifted is null)
         {
             before.Dispose();
+            mask.Dispose();
             return false;
         }
 
-        _selectionOriginX = Selection.X;
-        _selectionOriginY = Selection.Y;
-        _selectionOriginW = Selection.Width;
-        _selectionOriginH = Selection.Height;
+        _selectionBeforeTransform = Selection.Capture();
+        _selectionTransformMask = mask;
         _selectionTransformSource = sourceLayer;
         _selectionTransformBefore = before;
 
@@ -298,7 +392,7 @@ public sealed class DocumentWorkspace : IDisposable
             var source = _selectionTransformSource!;
             var before = _selectionTransformBefore!;
             source.ReplacePixels(before.Clone());
-            Selection.Set(_selectionOriginX, _selectionOriginY, _selectionOriginW, _selectionOriginH);
+            Selection.Restore(_selectionBeforeTransform!);
             ActiveTransform = null;
             session.Layer.Dispose();
             session.Dispose();
@@ -338,8 +432,12 @@ public sealed class DocumentWorkspace : IDisposable
                 floatLayer.OffsetY);
             var after = source.Pixels.Clone();
 
-            Selection.Set(floatLayer.OffsetX, floatLayer.OffsetY, floatLayer.Pixels.Width, floatLayer.Pixels.Height);
+            // The marquee takes the transformed shape of the lifted selection.
+            var (maskPixels, maskX, maskY) = session.Bake(_selectionTransformMask!);
+            using (maskPixels)
+                Selection.SetMask(maskX, maskY, maskPixels.Width, maskPixels.Height, AlphaChannel(maskPixels));
             Selection.ClampToDocument(Document.Width, Document.Height);
+            var selectionBefore = _selectionBeforeTransform!;
 
             ActiveTransform = null;
             floatLayer.Dispose();
@@ -347,8 +445,10 @@ public sealed class DocumentWorkspace : IDisposable
             _selectionTransformBefore = null; // owned by history command
             ClearSelectionTransformState(disposeBefore: false);
 
-            History.Record(new LayerPixelsCommand(
-                "Transform Selection", source, before, after, NotifyChanged));
+            History.Record(new CompoundCommand(
+                "Transform Selection",
+                new LayerPixelsCommand("Transform Selection", source, before, after, NotifyChanged),
+                new SelectionCommand("Transform Selection", Selection, selectionBefore, Selection.Capture())));
             Document.IsDirty = true;
             Changed?.Invoke();
             return;
@@ -384,7 +484,18 @@ public sealed class DocumentWorkspace : IDisposable
             _selectionTransformBefore?.Dispose();
         _selectionTransformBefore = null;
         _selectionTransformSource = null;
-        _selectionOriginX = _selectionOriginY = _selectionOriginW = _selectionOriginH = 0;
+        _selectionBeforeTransform = null;
+        _selectionTransformMask?.Dispose();
+        _selectionTransformMask = null;
+    }
+
+    private static byte[] AlphaChannel(PixelBuffer buffer)
+    {
+        var px = buffer.PixelsReadOnly;
+        var alpha = new byte[buffer.Width * buffer.Height];
+        for (int i = 0; i < alpha.Length; i++)
+            alpha[i] = px[i * 4 + 3];
+        return alpha;
     }
 
     public void Dispose()

@@ -165,8 +165,18 @@ public sealed class FreeTransformSession : IDisposable
     /// <summary>
     /// Bake transform into a new pixel buffer + document offset (AABB of result).
     /// </summary>
-    public (PixelBuffer pixels, int offsetX, int offsetY) Bake()
+    public (PixelBuffer pixels, int offsetX, int offsetY) Bake() => Bake(OriginalPixels);
+
+    /// <summary>
+    /// Bake another buffer the same size as the original pixels with the same transform
+    /// (e.g. the selection mask, so it follows the lifted pixels exactly).
+    /// </summary>
+    public (PixelBuffer pixels, int offsetX, int offsetY) Bake(PixelBuffer source)
     {
+        ArgumentNullException.ThrowIfNull(source);
+        if (source.Width != BaseWidth || source.Height != BaseHeight)
+            throw new ArgumentException("Source must match the transformed layer size.", nameof(source));
+
         var corners = GetCorners();
         double minX = corners.Min(c => c.x);
         double minY = corners.Min(c => c.y);
@@ -178,7 +188,7 @@ public sealed class FreeTransformSession : IDisposable
         int offsetX = (int)Math.Floor(minX);
         int offsetY = (int)Math.Floor(minY);
 
-        using var srcBmp = ImageCodec.ToSkBitmap(OriginalPixels);
+        using var srcBmp = ImageCodec.ToSkBitmap(source);
         var info = new SKImageInfo(outW, outH, SKColorType.Rgba8888, SKAlphaType.Unpremul);
         using var dstBmp = new SKBitmap(info);
         dstBmp.Erase(SKColors.Transparent);

@@ -1,0 +1,72 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:MiniPaint.App.ViewModels"
+        x:Class="MiniPaint.App.Views.ResizeAllWindow"
+        x:DataType="vm:ResizeAllViewModel"
+        Width="500" Height="560"
+        MinWidth="440" MinHeight="460"
+        WindowStartupLocation="CenterOwner"
+        Background="#2D2D30"
+        Foreground="#DDDDDD"
+        Title="{Binding Title}">
+
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="OK" Width="88" IsDefault="True" Click="OnOkClick" />
+      <Button Content="Cancel" Width="88" IsCancel="True" Click="OnCancelClick" />
+    </StackPanel>
+
+    <StackPanel DockPanel.Dock="Top" Spacing="12">
+      <TextBlock Text="{Binding Subtitle}" TextWrapping="Wrap" Foreground="#AAA" FontSize="12" />
+
+      <TextBlock Text="Resize by" FontSize="12" Foreground="#CCC" />
+      <ComboBox ItemsSource="{Binding Modes}"
+                SelectedItem="{Binding SelectedMode}"
+                HorizontalAlignment="Stretch" />
+
+      <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8" IsVisible="{Binding ShowPercent}">
+        <TextBlock Text="Scale" VerticalAlignment="Center" />
+        <NumericUpDown Grid.Column="1" Minimum="1" Maximum="1000" Increment="5"
+                       FormatString="0.##"
+                       Value="{Binding PercentValue}" />
+        <TextBlock Grid.Column="2" Text="%" Foreground="#888" VerticalAlignment="Center" />
+      </Grid>
+
+      <Grid ColumnDefinitions="Auto,*,Auto,*" ColumnSpacing="8" IsVisible="{Binding ShowBox}">
+        <TextBlock Text="Width" VerticalAlignment="Center" />
+        <NumericUpDown Grid.Column="1" Minimum="1" Maximum="16384" Increment="1"
+                       FormatString="0"
+                       Value="{Binding WidthValue}" />
+        <TextBlock Grid.Column="2" Text="Height" VerticalAlignment="Center" />
+        <NumericUpDown Grid.Column="3" Minimum="1" Maximum="16384" Increment="1"
+                       FormatString="0"
+                       Value="{Binding HeightValue}" />
+      </Grid>
+
+      <CheckBox Content="Do not enlarge smaller images"
+                IsChecked="{Binding DoNotEnlarge}"
+                IsVisible="{Binding ShowDoNotEnlarge}" />
+
+      <TextBlock Text="{Binding ModeNote}" TextWrapping="Wrap" Foreground="#888" FontSize="11" />
+      <TextBlock Text="{Binding InterpolationNote}" TextWrapping="Wrap" Foreground="#777" FontSize="11" />
+
+      <TextBlock Text="Result" FontSize="12" Foreground="#CCC" Margin="0,4,0,0" />
+    </StackPanel>
+
+    <Border BorderBrush="#3F3F46" BorderThickness="1" Background="#252526" Margin="0,8,0,0">
+      <ScrollViewer>
+        <ItemsControl ItemsSource="{Binding Preview}">
+          <ItemsControl.ItemTemplate>
+            <DataTemplate x:DataType="vm:ResizeAllPreviewItem">
+              <Grid ColumnDefinitions="*,Auto" Margin="8,4">
+                <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                <TextBlock Grid.Column="1" Text="{Binding Change}" Foreground="#AAA" FontSize="12"
+                           Margin="12,0,0,0" VerticalAlignment="Center" />
+              </Grid>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </ScrollViewer>
+    </Border>
+  </DockPanel>
+</Window>

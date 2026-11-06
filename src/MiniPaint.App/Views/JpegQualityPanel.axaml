@@ -1,0 +1,19 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:MiniPaint.App.ViewModels"
+             x:Class="MiniPaint.App.Views.JpegQualityPanel"
+             x:DataType="vm:JpegOptionsViewModel">
+
+  <StackPanel Spacing="8">
+    <TextBlock Text="JPG quality (1 = smallest file, 100 = best quality)" FontSize="12" Foreground="#CCC" />
+    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+      <Slider Minimum="1" Maximum="100" TickFrequency="1" IsSnapToTickEnabled="True"
+              VerticalAlignment="Center"
+              Value="{Binding QualitySliderValue, Mode=TwoWay}" />
+      <NumericUpDown Grid.Column="1" Width="110" Minimum="1" Maximum="100" Increment="1"
+                     FormatString="0"
+                     Value="{Binding QualityValue}" />
+    </Grid>
+    <TextBlock Text="{Binding QualityHint}" FontSize="11" Foreground="#888" />
+  </StackPanel>
+</UserControl>

@@ -34,43 +34,78 @@ public static class PixelOps
         opacity = Math.Clamp(opacity, 0f, 1f);
         if (opacity <= 0f) return;
 
-        var dstPx = dst.Pixels;
-        var srcPx = src.PixelsReadOnly;
-
         int x0 = Math.Max(0, offsetX);
         int y0 = Math.Max(0, offsetY);
         int x1 = Math.Min(dst.Width, offsetX + src.Width);
         int y1 = Math.Min(dst.Height, offsetY + src.Height);
+        if (x1 <= x0 || y1 <= y0) return;
 
-        for (int y = y0; y < y1; y++)
+        // Rows are independent: blend them on several cores for large layers.
+        if ((long)(x1 - x0) * (y1 - y0) < 128 * 1024)
         {
-            int sy = y - offsetY;
-            for (int x = x0; x < x1; x++)
+            for (int y = y0; y < y1; y++)
+                BlendRow(dst, src, y, x0, x1, offsetX, offsetY, opacity, blendMode);
+        }
+        else
+        {
+            Parallel.For(y0, y1, y => BlendRow(dst, src, y, x0, x1, offsetX, offsetY, opacity, blendMode));
+        }
+    }
+
+    private static void BlendRow(
+        PixelBuffer dst, PixelBuffer src, int y, int x0, int x1,
+        int offsetX, int offsetY, float opacity, BlendMode blendMode)
+    {
+        var dstPx = dst.Pixels;
+        var srcPx = src.PixelsReadOnly;
+        int sy = y - offsetY;
+        for (int x = x0; x < x1; x++)
+        {
+            int sx = x - offsetX;
+            int si = (sy * src.Width + sx) * 4;
+            int di = (y * dst.Width + x) * 4;
+
+            byte sa = srcPx[si + 3];
+            if (sa == 0) continue;
+
+            byte sr = srcPx[si];
+            byte sg = srcPx[si + 1];
+            byte sb = srcPx[si + 2];
+
+            byte dr = dstPx[di];
+            byte dg = dstPx[di + 1];
+            byte db = dstPx[di + 2];
+            byte da = dstPx[di + 3];
+
+            BlendOps.BlendPixel(blendMode, sr, sg, sb, sa, ref dr, ref dg, ref db, ref da, opacity);
+
+            dstPx[di] = dr;
+            dstPx[di + 1] = dg;
+            dstPx[di + 2] = db;
+            dstPx[di + 3] = da;
+        }
+    }
+
+    /// <summary>
+    /// Nearest-neighbour resample (no blending): every output pixel is an exact source color,
+    /// as needed for previews of palette / pixel-art images.
+    /// </summary>
+    public static PixelBuffer ResampleNearest(PixelBuffer source, int width, int height)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        var result = new PixelBuffer(width, height);
+        var dst = result.Pixels;
+        var src = source.PixelsReadOnly;
+        for (int y = 0; y < height; y++)
+        {
+            int sy = Math.Min(source.Height - 1, (int)((y + 0.5) * source.Height / height));
+            for (int x = 0; x < width; x++)
             {
-                int sx = x - offsetX;
-                int si = (sy * src.Width + sx) * 4;
-                int di = (y * dst.Width + x) * 4;
-
-                byte sa = srcPx[si + 3];
-                if (sa == 0) continue;
-
-                byte sr = srcPx[si];
-                byte sg = srcPx[si + 1];
-                byte sb = srcPx[si + 2];
-
-                byte dr = dstPx[di];
-                byte dg = dstPx[di + 1];
-                byte db = dstPx[di + 2];
-                byte da = dstPx[di + 3];
-
-                BlendOps.BlendPixel(blendMode, sr, sg, sb, sa, ref dr, ref dg, ref db, ref da, opacity);
-
-                dstPx[di] = dr;
-                dstPx[di + 1] = dg;
-                dstPx[di + 2] = db;
-                dstPx[di + 3] = da;
+                int sx = Math.Min(source.Width - 1, (int)((x + 0.5) * source.Width / width));
+                src.Slice((sy * source.Width + sx) * 4, 4).CopyTo(dst.Slice((y * width + x) * 4, 4));
             }
         }
+        return result;
     }
 
     /// <summary>

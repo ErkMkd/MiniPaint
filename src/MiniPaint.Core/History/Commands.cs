@@ -2,6 +2,7 @@ using MiniPaint.Core.ColorMode;
 using MiniPaint.Core.Composition;
 using MiniPaint.Core.Document;
 using MiniPaint.Core.Imaging;
+using MiniPaint.Core.Selection;
 
 namespace MiniPaint.Core.History;
 
@@ -70,6 +71,69 @@ public sealed class LayerPixelsCommand : IEditCommand
     {
         _layer.ReplacePixels(_before.Clone());
         _onChanged?.Invoke();
+    }
+}
+
+/// <summary>Selection change (marquee, Select All, Deselect, Inverse, Transform Selection…).</summary>
+public sealed class SelectionCommand : IEditCommand
+{
+    private readonly SelectionState _selection;
+    private readonly SelectionSnapshot _before;
+    private readonly SelectionSnapshot _after;
+    private readonly Action? _onChanged;
+
+    public string Name { get; }
+
+    public SelectionCommand(
+        string name,
+        SelectionState selection,
+        SelectionSnapshot before,
+        SelectionSnapshot after,
+        Action? onChanged = null)
+    {
+        Name = name;
+        _selection = selection;
+        _before = before;
+        _after = after;
+        _onChanged = onChanged;
+    }
+
+    public void Execute()
+    {
+        _selection.Restore(_after);
+        _onChanged?.Invoke();
+    }
+
+    public void Undo()
+    {
+        _selection.Restore(_before);
+        _onChanged?.Invoke();
+    }
+}
+
+/// <summary>Several commands as one undo step (e.g. moved pixels + moved marquee); undone in reverse.</summary>
+public sealed class CompoundCommand : IEditCommand
+{
+    private readonly IEditCommand[] _commands;
+
+    public string Name { get; }
+
+    public CompoundCommand(string name, params IEditCommand[] commands)
+    {
+        Name = name;
+        _commands = commands;
+    }
+
+    public void Execute()
+    {
+        foreach (var command in _commands)
+            command.Execute();
+    }
+
+    public void Undo()
+    {
+        for (int i = _commands.Length - 1; i >= 0; i--)
+            _commands[i].Undo();
     }
 }
 

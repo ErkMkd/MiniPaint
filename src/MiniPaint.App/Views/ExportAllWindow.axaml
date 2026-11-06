@@ -1,0 +1,47 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:MiniPaint.App.ViewModels"
+        xmlns:views="using:MiniPaint.App.Views"
+        x:Class="MiniPaint.App.Views.ExportAllWindow"
+        x:DataType="vm:ExportAllViewModel"
+        Width="480" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="#2D2D30"
+        Foreground="#DDDDDD"
+        Title="{Binding Title}">
+
+  <DockPanel Margin="16">
+    <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="8" Margin="0,16,0,0">
+      <Button Content="Export" Width="88" IsDefault="True" Click="OnOkClick" />
+      <Button Content="Cancel" Width="88" IsCancel="True" Click="OnCancelClick" />
+    </StackPanel>
+
+    <StackPanel Spacing="12">
+      <TextBlock Text="{Binding Subtitle}" TextWrapping="Wrap" Foreground="#AAA" FontSize="12" />
+
+      <TextBlock Text="Format" FontSize="12" Foreground="#CCC" />
+      <ComboBox ItemsSource="{Binding Formats}"
+                SelectedItem="{Binding SelectedFormat}"
+                HorizontalAlignment="Stretch" />
+
+      <StackPanel Spacing="8" IsVisible="{Binding ShowJpegOptions}">
+        <views:JpegQualityPanel DataContext="{Binding Jpeg}" />
+        <TextBlock Text="The same quality is used for every image. Transparent areas are filled with white."
+                   TextWrapping="Wrap" Foreground="#888" FontSize="11" />
+      </StackPanel>
+
+      <TextBlock Text="Output folder" FontSize="12" Foreground="#CCC" />
+      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+        <TextBox Text="{Binding Folder}" />
+        <Button Grid.Column="1" Content="Browse..." Click="OnBrowseClick" />
+      </Grid>
+
+      <CheckBox Content="Overwrite existing files" IsChecked="{Binding OverwriteExisting}" />
+      <TextBlock Text="When unchecked, existing files are kept and new files get a numbered name, e.g. photo (2).jpg."
+                 TextWrapping="Wrap" Foreground="#888" FontSize="11" />
+
+      <TextBlock Text="{Binding ErrorText}" Foreground="#F48771" FontSize="12" TextWrapping="Wrap" />
+    </StackPanel>
+  </DockPanel>
+</Window>

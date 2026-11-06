@@ -66,10 +66,38 @@ public sealed class PixelBuffer : IDisposable
         return new PixelBuffer(Width, Height, copy);
     }
 
+    /// <summary>
+    /// Copy all rows into unmanaged memory (e.g. a locked bitmap) whose rows are
+    /// <paramref name="destinationRowBytes"/> apart — no intermediate managed copy.
+    /// </summary>
+    public unsafe void CopyTo(IntPtr destination, int destinationRowBytes)
+    {
+        ThrowIfDisposed();
+        if (destinationRowBytes < Stride)
+            throw new ArgumentOutOfRangeException(nameof(destinationRowBytes));
+
+        fixed (byte* src = _pixels)
+        {
+            var dst = (byte*)destination;
+            if (destinationRowBytes == Stride)
+            {
+                Buffer.MemoryCopy(src, dst, Length, Length);
+                return;
+            }
+            for (int y = 0; y < Height; y++)
+                Buffer.MemoryCopy(src + y * Stride, dst + (long)y * destinationRowBytes, destinationRowBytes, Stride);
+        }
+    }
+
     public void Clear(byte r = 0, byte g = 0, byte b = 0, byte a = 0)
     {
         ThrowIfDisposed();
         var px = _pixels!;
+        if ((r | g | b | a) == 0)
+        {
+            px.AsSpan(0, Length).Clear();
+            return;
+        }
         for (int i = 0; i < px.Length; i += 4)
         {
             px[i] = r;

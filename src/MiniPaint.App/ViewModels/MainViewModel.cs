@@ -11,6 +11,7 @@ using MiniPaint.Core.Document;
 using MiniPaint.Core.History;
 using MiniPaint.Core.Imaging;
 using MiniPaint.Core.Project;
+using MiniPaint.Core.Selection;
 
 namespace MiniPaint.App.ViewModels;
 
@@ -18,6 +19,13 @@ public partial class MainViewModel : ViewModelBase, IDisposable
 {
     private readonly WorkspaceManager _manager = new();
     private Window? _window;
+
+    // Remembered for the session so repeated exports / batch resizes start from the last choice.
+    private int _jpegQuality = ImageCodec.DefaultJpegQuality;
+    private string? _lastExportFolder;
+    private ExportFormat _lastExportFormat = ExportFormat.Png;
+    private BatchResizeOptions? _lastResizeAllOptions;
+    private int _colorRangeFuzziness = 40;
 
     public ObservableCollection<DocumentTabViewModel> Tabs { get; } = new();
     public ObservableCollection<LayerItemViewModel> Layers { get; } = new();
@@ -38,10 +46,83 @@ public partial class MainViewModel : ViewModelBase, IDisposable
 
     public BlendModeOption[] BlendModes { get; } = BlendModeNames.All;
 
+    // --- Selection tools options bar (Rectangular Selection + Magic Wand) ---
+
+    /// <summary>Mode used by a plain click; Shift / Alt / Shift+Alt override it for one gesture.</summary>
+    [ObservableProperty] public partial SelectionCombineMode SelectionMode { get; set; }
+    [ObservableProperty] public partial decimal WandToleranceValue { get; set; } = 32;
+    [ObservableProperty] public partial bool WandContiguous { get; set; } = true;
+    [ObservableProperty] public partial bool WandAntiAlias { get; set; }
+    [ObservableProperty] public partial WandSampleOption SelectedWandSample { get; set; }
+
+    public WandSampleOption[] WandSamples { get; } =
+    [
+        new(true, "Visible image"),
+        new(false, "Current layer")
+    ];
+
+    public MagicWandOptions WandOptions => new(
+        (int)Math.Clamp(Math.Round(WandToleranceValue), 0, 255),
+        WandContiguous,
+        WandAntiAlias,
+        SelectedWandSample.VisibleImage);
+
+    public bool IsSelectionModeReplace
+    {
+        get => SelectionMode == SelectionCombineMode.Replace;
+        set { if (value) SelectionMode = SelectionCombineMode.Replace; }
+    }
+
+    public bool IsSelectionModeAdd
+    {
+        get => SelectionMode == SelectionCombineMode.Add;
+        set { if (value) SelectionMode = SelectionCombineMode.Add; }
+    }
+
+    public bool IsSelectionModeSubtract
+    {
+        get => SelectionMode == SelectionCombineMode.Subtract;
+        set { if (value) SelectionMode = SelectionCombineMode.Subtract; }
+    }
+
+    public bool IsSelectionModeIntersect
+    {
+        get => SelectionMode == SelectionCombineMode.Intersect;
+        set { if (value) SelectionMode = SelectionCombineMode.Intersect; }
+    }
+
+    public bool IsMagicWandTool => CurrentTool == CanvasTool.MagicWand;
+
+    public bool ShowSelectionOptions =>
+        (CurrentTool is CanvasTool.RectSelect or CanvasTool.MagicWand) && !IsTransforming && !IsEditingSelection;
+
+    partial void OnSelectionModeChanged(SelectionCombineMode value)
+    {
+        OnPropertyChanged(nameof(IsSelectionModeReplace));
+        OnPropertyChanged(nameof(IsSelectionModeAdd));
+        OnPropertyChanged(nameof(IsSelectionModeSubtract));
+        OnPropertyChanged(nameof(IsSelectionModeIntersect));
+    }
+
+    partial void OnWandToleranceValueChanged(decimal value) => OnPropertyChanged(nameof(WandOptions));
+    partial void OnWandContiguousChanged(bool value) => OnPropertyChanged(nameof(WandOptions));
+    partial void OnWandAntiAliasChanged(bool value) => OnPropertyChanged(nameof(WandOptions));
+    partial void OnSelectedWandSampleChanged(WandSampleOption value) => OnPropertyChanged(nameof(WandOptions));
+
+    partial void OnCurrentToolChanged(CanvasTool value)
+    {
+        OnPropertyChanged(nameof(IsMagicWandTool));
+        OnPropertyChanged(nameof(ShowSelectionOptions));
+    }
+
+    partial void OnIsTransformingChanged(bool value) => OnPropertyChanged(nameof(ShowSelectionOptions));
+    partial void OnIsEditingSelectionChanged(bool value) => OnPropertyChanged(nameof(ShowSelectionOptions));
+
     public DocumentWorkspace? ActiveWorkspace => SelectedTab?.Workspace;
 
     public MainViewModel()
     {
+        SelectedWandSample = WandSamples[0];
         _manager.Changed += RefreshFromManager;
         // Demo document on first run is created from the window Opened handler.
     }
@@ -101,7 +182,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             l.IsActive = l.Id == value.Id;
         SelectedBlendOption = BlendModeNames.GetOption(value.BlendMode);
         TransformOpacity = value.Opacity;
-        ActiveWorkspace.InvalidateComposite();
+        // No InvalidateComposite: the active layer does not change the merged image, and
+        // recompositing here re-ran the whole pipeline (dither included) on every UI refresh.
         UpdateStatus();
     }
 
@@ -134,8 +216,26 @@ public partial class MainViewModel : ViewModelBase, IDisposable
 
     private void RefreshLayers()
     {
-        Layers.Clear();
         var ws = ActiveWorkspace;
+        if (ws is not null && SameLayerRows(ws.Document))
+        {
+            // Runs on every workspace change (selection, zoom…): only refresh the existing rows.
+            foreach (var item in Layers)
+            {
+                item.SyncFromModel();
+                item.IsActive = item.Id == ws.Document.ActiveLayerId;
+            }
+            var activeRow = Layers.FirstOrDefault(l => l.IsActive) ?? Layers.FirstOrDefault();
+            if (!ReferenceEquals(SelectedLayer, activeRow))
+                SelectedLayer = activeRow;
+            SelectedBlendOption = SelectedLayer is null
+                ? null
+                : BlendModeNames.GetOption(SelectedLayer.BlendMode);
+            TransformOpacity = SelectedLayer?.Opacity ?? 1f;
+            return;
+        }
+
+        Layers.Clear();
         if (ws is null) return;
 
         // Show top → bottom in panel
@@ -150,6 +250,19 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             ? null
             : BlendModeNames.GetOption(SelectedLayer.BlendMode);
         TransformOpacity = SelectedLayer?.Opacity ?? 1f;
+    }
+
+    /// <summary>True when the panel rows are exactly the document's layers (top → bottom).</summary>
+    private bool SameLayerRows(PaintDocument document)
+    {
+        int count = document.Layers.Count;
+        if (Layers.Count != count || count == 0) return false;
+        for (int i = 0; i < count; i++)
+        {
+            if (!ReferenceEquals(Layers[i].Layer, document.Layers[count - 1 - i]))
+                return false;
+        }
+        return true;
     }
 
     public void UpdateStatus(int? cursorX = null, int? cursorY = null)
@@ -319,33 +432,31 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         UpdateStatus();
     }
 
-    [RelayCommand]
-    private async Task ExportPngAsync()
+    /// <summary>
+    /// Save picker → local path, or null if cancelled. Releases the picker handle first — on Windows
+    /// it often keeps an exclusive lock on the chosen path (especially when overwriting the file
+    /// still "open" in the app).
+    /// </summary>
+    private async Task<string?> PickSavePathAsync(string title, string suggestedFileName, FilePickerFileType fileType)
     {
-        var ws = ActiveWorkspace;
-        if (ws is null || _window is null) return;
+        if (_window is null) return null;
 
-        IStorageFile? file = null;
+        var file = await _window.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = title,
+            DefaultExtension = Path.GetExtension(suggestedFileName).TrimStart('.'),
+            SuggestedFileName = suggestedFileName,
+            FileTypeChoices = [fileType]
+        });
+        if (file is null) return null;
+
+        string? path;
         try
         {
-            file = await _window.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
-            {
-                Title = "Export PNG",
-                DefaultExtension = "png",
-                SuggestedFileName = ws.Document.Name + ".png",
-                FileTypeChoices =
-                [
-                    new FilePickerFileType("PNG") { Patterns = ["*.png"] }
-                ]
-            });
-            if (file is null) return;
-
-            var path = file.TryGetLocalPath();
-            AppLog.Info($"Export PNG begin path={path ?? file.Name} doc={ws.Document.Width}x{ws.Document.Height}");
-            StatusText = "Exporting PNG…";
-
-            // Release the picker handle first — on Windows it often keeps an exclusive lock
-            // on the chosen path (especially when overwriting the file still "open" in the app).
+            path = file.TryGetLocalPath();
+        }
+        finally
+        {
             try
             {
                 if (file is IAsyncDisposable asyncDisp)
@@ -357,14 +468,31 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             {
                 AppLog.Warn($"StorageFile dispose: {ex.Message}");
             }
-            file = null;
+        }
 
-            if (string.IsNullOrWhiteSpace(path))
-            {
-                AppLog.Error("Export PNG: no local path from save picker");
-                StatusText = "Export failed (no path)";
-                return;
-            }
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            AppLog.Error($"{title}: no local path from save picker");
+            StatusText = "Export failed (no path)";
+            return null;
+        }
+        return path;
+    }
+
+    [RelayCommand]
+    private async Task ExportPngAsync()
+    {
+        var ws = ActiveWorkspace;
+        if (ws is null || _window is null) return;
+
+        try
+        {
+            var path = await PickSavePathAsync("Export PNG", ws.Document.Name + ".png",
+                new FilePickerFileType("PNG") { Patterns = ["*.png"] });
+            if (path is null) return;
+
+            AppLog.Info($"Export PNG begin path={path} doc={ws.Document.Width}x{ws.Document.Height}");
+            StatusText = "Exporting PNG…";
 
             // Encode off the UI thread so the window stays responsive.
             await Task.Run(() => ws.ExportPng(path));
@@ -378,17 +506,112 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             AppLog.Error("Export PNG failed", ex);
             StatusText = "Export failed — see log";
         }
-        finally
+    }
+
+    [RelayCommand]
+    private async Task ExportJpgAsync()
+    {
+        var ws = ActiveWorkspace;
+        if (ws is null || _window is null) return;
+
+        try
         {
-            if (file is IAsyncDisposable asyncDisp)
+            var path = await PickSavePathAsync("Export JPG", ws.Document.Name + ".jpg",
+                new FilePickerFileType("JPEG") { Patterns = ["*.jpg", "*.jpeg"] });
+            if (path is null) return;
+
+            var options = new JpegOptionsViewModel(_jpegQuality);
+            var ok = await new Views.JpegOptionsWindow(options).ShowDialog<bool?>(_window);
+            if (ok != true) return;
+            int quality = _jpegQuality = options.Quality;
+
+            AppLog.Info($"Export JPG begin path={path} quality={quality} doc={ws.Document.Width}x{ws.Document.Height}");
+            StatusText = "Exporting JPG…";
+
+            await Task.Run(() => ws.ExportJpeg(path, quality));
+
+            AppLog.Info($"Export JPG done: {path}");
+            StatusText = $"Exported JPG (quality {quality})";
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Export JPG failed", ex);
+            StatusText = "Export failed — see log";
+        }
+    }
+
+    /// <summary>
+    /// One merged PNG or JPG per open tab into a single folder; JPG quality applies to every image.
+    /// </summary>
+    [RelayCommand]
+    private async Task ExportAllAsync()
+    {
+        if (_window is null || _manager.Workspaces.Count == 0) return;
+
+        var workspaces = _manager.Workspaces.ToList();
+        var vm = new ExportAllViewModel(
+            workspaces.Count, _lastExportFolder ?? DefaultExportFolder(), _lastExportFormat, _jpegQuality);
+        var ok = await new Views.ExportAllWindow(vm).ShowDialog<bool?>(_window);
+        if (ok != true) return;
+
+        _lastExportFolder = vm.Folder;
+        _lastExportFormat = vm.Format;
+        _jpegQuality = vm.Jpeg.Quality;
+
+        var format = vm.Format;
+        int quality = vm.Jpeg.Quality;
+        IReadOnlyList<string> paths;
+        try
+        {
+            paths = BatchExport.PlanPaths(
+                workspaces.Select(w => w.Document.Name),
+                vm.Folder,
+                format,
+                vm.OverwriteExisting ? null : File.Exists);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Export All: invalid output folder", ex);
+            StatusText = "Export All failed — see log";
+            return;
+        }
+
+        AppLog.Info($"Export All begin count={workspaces.Count} format={format} quality={quality} " +
+                    $"folder={vm.Folder} overwrite={vm.OverwriteExisting}");
+
+        int failed = 0;
+        for (int i = 0; i < workspaces.Count; i++)
+        {
+            var ws = workspaces[i];
+            var path = paths[i];
+            StatusText = $"Exporting {i + 1}/{workspaces.Count}: {Path.GetFileName(path)}…";
+            try
             {
-                try { await asyncDisp.DisposeAsync(); } catch { /* ignore */ }
+                await Task.Run(() => BatchExport.Export(ws.Document, path, format, quality));
+                AppLog.Info($"Export All: {path}");
             }
-            else if (file is IDisposable disp)
+            catch (Exception ex)
             {
-                try { disp.Dispose(); } catch { /* ignore */ }
+                failed++;
+                AppLog.Error($"Export All failed for '{ws.Document.Name}' → {path}", ex);
             }
         }
+
+        int done = workspaces.Count - failed;
+        StatusText = failed == 0
+            ? $"Exported {done} image(s) to {vm.Folder}"
+            : $"Exported {done} of {workspaces.Count} image(s) — {failed} failed, see log";
+        AppLog.Info($"Export All done ok={done} failed={failed}");
+    }
+
+    private string DefaultExportFolder()
+    {
+        var doc = ActiveWorkspace?.Document;
+        var source = doc?.FilePath ?? doc?.ProjectPath;
+        var dir = source is null ? null : Path.GetDirectoryName(source);
+        return !string.IsNullOrEmpty(dir)
+            ? dir
+            : Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
     }
 
     [RelayCommand]
@@ -498,26 +721,9 @@ public partial class MainViewModel : ViewModelBase, IDisposable
 
         try
         {
-            var file = await _window.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
-            {
-                Title = "Export IFF-ILBM",
-                DefaultExtension = "iff",
-                SuggestedFileName = ws.Document.Name + ".iff",
-                FileTypeChoices =
-                [
-                    new FilePickerFileType("IFF ILBM") { Patterns = ["*.iff", "*.ilbm"] }
-                ]
-            });
-            if (file is null) return;
-            var path = file.TryGetLocalPath();
-            try
-            {
-                if (file is IAsyncDisposable asyncDisp) await asyncDisp.DisposeAsync();
-                else if (file is IDisposable disp) disp.Dispose();
-            }
-            catch { /* ignore */ }
-
-            if (string.IsNullOrWhiteSpace(path)) return;
+            var path = await PickSavePathAsync("Export IFF-ILBM", ws.Document.Name + ".iff",
+                new FilePickerFileType("IFF ILBM") { Patterns = ["*.iff", "*.ilbm"] });
+            if (path is null) return;
 
             StatusText = "Exporting IFF-ILBM…";
             await Task.Run(() => IlbmCodec.Save(ws.Document, path));
@@ -552,6 +758,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
 
         try
         {
+            int oldWidth = ws.Document.Width;
+            int oldHeight = ws.Document.Height;
             AppLog.Info($"{mode}: {ws.Document.Width}x{ws.Document.Height} → {vm.ResultWidth}x{vm.ResultHeight}" +
                         (mode == ResizeDialogMode.CanvasSize ? $" anchor={vm.Anchor}" : ""));
             StatusText = mode == ResizeDialogMode.ImageSize ? "Resizing image…" : "Resizing canvas…";
@@ -564,9 +772,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
                     ws.Document, vm.ResultWidth, vm.ResultHeight, ws.NotifyChanged));
 
             // Factory already applied the mutation; record for undo without re-executing.
-            ws.History.Record(cmd);
-            if (ws.Selection.HasSelection)
-                ws.Selection.ClampToDocument(ws.Document.Width, ws.Document.Height);
+            RecordResize(ws, cmd, oldWidth, oldHeight,
+                mode == ResizeDialogMode.CanvasSize ? vm.Anchor : null);
             ws.NotifyChanged();
             UpdateStatus();
             FitRequested?.Invoke();
@@ -577,6 +784,107 @@ public partial class MainViewModel : ViewModelBase, IDisposable
             AppLog.Error($"{mode} failed", ex);
             StatusText = $"{mode} failed — see log";
         }
+    }
+
+    /// <summary>
+    /// Image Size applied to every open tab with one rule (percentage / fit within / exact size).
+    /// Each tab records its own undo step.
+    /// </summary>
+    [RelayCommand]
+    private async Task ResizeAllAsync()
+    {
+        if (_window is null || _manager.Workspaces.Count == 0) return;
+
+        var workspaces = _manager.Workspaces.ToList();
+        var box = ActiveWorkspace?.Document ?? workspaces[0].Document;
+        var vm = new ResizeAllViewModel(
+            workspaces.Select(w => new ResizeAllDocument(w.Document.Name, w.Document.Width, w.Document.Height)).ToList(),
+            _lastResizeAllOptions,
+            box.Width,
+            box.Height);
+        var ok = await new Views.ResizeAllWindow(vm).ShowDialog<bool?>(_window);
+        if (ok != true) return;
+
+        var options = vm.Options;
+        _lastResizeAllOptions = options;
+        AppLog.Info($"Resize All begin count={workspaces.Count} {options}");
+
+        int resized = 0, unchanged = 0, failed = 0;
+        for (int i = 0; i < workspaces.Count; i++)
+        {
+            var ws = workspaces[i];
+            if (!_manager.Workspaces.Contains(ws)) continue; // tab closed while resizing
+
+            try
+            {
+                var (w, h) = BatchResize.ComputeTargetSize(ws.Document.Width, ws.Document.Height, options);
+                if (w == ws.Document.Width && h == ws.Document.Height)
+                {
+                    unchanged++;
+                    continue;
+                }
+
+                if (ws.IsTransforming) ws.CancelTransform();
+                if (ws.IsEditingSelection) ws.CancelSelectionEdit();
+
+                StatusText = $"Resizing {i + 1}/{workspaces.Count}: {ws.Document.Name}…";
+                AppLog.Info($"Resize All: '{ws.Document.Name}' {ws.Document.Width}x{ws.Document.Height} → {w}x{h}");
+
+                // Heavy pixel work off the UI thread; the factory applies the mutation, record for undo.
+                int oldWidth = ws.Document.Width;
+                int oldHeight = ws.Document.Height;
+                var cmd = await Task.Run(() => DocumentResizeCommand.ImageSize(ws.Document, w, h, ws.NotifyChanged));
+                RecordResize(ws, cmd, oldWidth, oldHeight, anchor: null);
+                ws.NotifyChanged();
+                resized++;
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                AppLog.Error($"Resize All failed for '{ws.Document.Name}'", ex);
+            }
+        }
+
+        SyncTransformUi();
+        FitAllRequested?.Invoke();
+
+        var summary = $"Resized {resized} image(s)";
+        if (unchanged > 0) summary += $", {unchanged} unchanged";
+        if (failed > 0) summary += $" — {failed} failed, see log";
+        StatusText = summary;
+        AppLog.Info($"Resize All done resized={resized} unchanged={unchanged} failed={failed}");
+    }
+
+    /// <summary>
+    /// Record an already-applied resize. The selection follows the pixels — shifted with the anchor
+    /// for Canvas Size, scaled for Image Size (<paramref name="anchor"/> null) — and undo restores both.
+    /// </summary>
+    private static void RecordResize(
+        DocumentWorkspace ws, DocumentResizeCommand cmd, int oldWidth, int oldHeight, CanvasAnchor? anchor)
+    {
+        var selection = ws.Selection;
+        if (!selection.HasSelection)
+        {
+            ws.History.Record(cmd);
+            return;
+        }
+
+        var before = selection.Capture();
+        int newWidth = ws.Document.Width;
+        int newHeight = ws.Document.Height;
+        if (anchor is { } a)
+        {
+            var (dx, dy) = CanvasAnchorMath.OffsetDelta(a, oldWidth, oldHeight, newWidth, newHeight);
+            selection.Offset(dx, dy);
+        }
+        else
+        {
+            selection.ScaleBy(newWidth / (double)oldWidth, newHeight / (double)oldHeight);
+        }
+        selection.ClampToDocument(newWidth, newHeight);
+
+        ws.History.Record(new CompoundCommand(cmd.Name, cmd,
+            new SelectionCommand(cmd.Name, selection, before, selection.Capture())));
     }
 
     [RelayCommand]
@@ -625,8 +933,49 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     }
 
     [RelayCommand]
+    private void InverseSelection()
+    {
+        ActiveWorkspace?.InvertSelection();
+        if (CurrentTool == CanvasTool.SelectionEdit)
+            CurrentTool = CanvasTool.RectSelect;
+        SyncTransformUi();
+    }
+
+    [RelayCommand]
+    private async Task ColorRangeAsync()
+    {
+        var ws = ActiveWorkspace;
+        if (ws is null || _window is null) return;
+        if (ws.IsTransforming) ws.CancelTransform();
+        if (ws.IsEditingSelection) ws.CancelSelectionEdit();
+
+        using var vm = new ColorRangeViewModel(ws.GetComposite(), _colorRangeFuzziness, SelectionMode);
+        var ok = await new Views.ColorRangeWindow(vm).ShowDialog<bool?>(_window);
+        _colorRangeFuzziness = vm.Fuzziness;
+        if (ok != true || !vm.HasColors) return;
+
+        try
+        {
+            var options = vm.Options;
+            ws.ColorRangeSelect(options, vm.SelectedMode.Mode);
+            if (CurrentTool == CanvasTool.SelectionEdit)
+                CurrentTool = CanvasTool.RectSelect;
+            SyncTransformUi();
+            AppLog.Info($"Color Range: {options.Include.Count} color(s), {options.Exclude.Count} excluded, " +
+                        $"fuzziness {options.Fuzziness}, {vm.SelectedMode.Mode}");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Color Range failed", ex);
+            StatusText = "Color Range failed — see log";
+        }
+    }
+
+    [RelayCommand]
     private void Undo()
     {
+        // Photoshop: undo during a transform cancels it instead of stepping back through history.
+        if (CancelPendingTransform()) return;
         ActiveWorkspace?.History.Undo();
         RefreshLayers();
     }
@@ -634,8 +983,20 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private void Redo()
     {
+        if (CancelPendingTransform()) return;
         ActiveWorkspace?.History.Redo();
         RefreshLayers();
+    }
+
+    private bool CancelPendingTransform()
+    {
+        var ws = ActiveWorkspace;
+        if (ws is null || (!ws.IsTransforming && !ws.IsEditingSelection)) return false;
+        if (ws.IsTransforming) ws.CancelTransform();
+        if (ws.IsEditingSelection) ws.CancelSelectionEdit();
+        CurrentTool = CanvasTool.RectSelect;
+        SyncTransformUi();
+        return true;
     }
 
     [RelayCommand]
@@ -717,6 +1078,15 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         if (ActiveWorkspace?.IsTransforming == true) ActiveWorkspace.CancelTransform();
         if (ActiveWorkspace?.IsEditingSelection == true) ActiveWorkspace.CommitSelectionEdit();
         CurrentTool = CanvasTool.RectSelect;
+        SyncTransformUi();
+    }
+
+    [RelayCommand]
+    private void SetToolMagicWand()
+    {
+        if (ActiveWorkspace?.IsTransforming == true) ActiveWorkspace.CancelTransform();
+        if (ActiveWorkspace?.IsEditingSelection == true) ActiveWorkspace.CommitSelectionEdit();
+        CurrentTool = CanvasTool.MagicWand;
         SyncTransformUi();
     }
 
@@ -849,6 +1219,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     private void Zoom100() => Zoom100Requested?.Invoke();
 
     public event Action? FitRequested;
+    /// <summary>Fit every open tab (after Resize All, so switching tabs shows the whole image).</summary>
+    public event Action? FitAllRequested;
     public event Action? Zoom100Requested;
 
     public void PreviewLayerOpacity(LayerItemViewModel item, float opacity)
@@ -927,4 +1299,9 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         _manager.Dispose();
         GC.SuppressFinalize(this);
     }
+}
+
+public sealed record WandSampleOption(bool VisibleImage, string Label)
+{
+    public override string ToString() => Label;
 }

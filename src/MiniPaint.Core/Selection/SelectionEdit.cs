@@ -3,8 +3,9 @@ using MiniPaint.Core.Transform;
 namespace MiniPaint.Core.Selection;
 
 /// <summary>
-/// Photoshop-style "Transform Selection": resize the selection rectangle only
-/// (8 handles, opposite anchor by default, Alt = center, Shift = aspect ratio).
+/// Photoshop-style "Transform Selection": resize the selection outline only — the mask of a
+/// non-rectangular selection is resampled with it (8 handles, opposite anchor by default,
+/// Alt = center, Shift = aspect ratio).
 /// </summary>
 public sealed class SelectionEditSession
 {
@@ -13,6 +14,9 @@ public sealed class SelectionEditSession
     public int OriginalY { get; }
     public int OriginalWidth { get; }
     public int OriginalHeight { get; }
+
+    /// <summary>Selection before the edit (Cancel restores it; Commit records it for undo).</summary>
+    public SelectionSnapshot Original { get; }
 
     public SelectionEditSession(SelectionState selection)
     {
@@ -23,13 +27,13 @@ public sealed class SelectionEditSession
         OriginalY = selection.Y;
         OriginalWidth = selection.Width;
         OriginalHeight = selection.Height;
+        Original = selection.Capture();
     }
 
     public SelectionScaleInteraction BeginScale(TransformHandle handle) =>
         new(_selection, handle);
 
-    public void RestoreOriginal() =>
-        _selection.Set(OriginalX, OriginalY, OriginalWidth, OriginalHeight);
+    public void RestoreOriginal() => _selection.Restore(Original);
 
     public (double x, double y) GetHandleDocPoint(TransformHandle handle)
     {
@@ -70,7 +74,7 @@ public sealed class SelectionEditSession
                 return h;
         }
 
-        if (_selection.ContainsDoc(docX, docY))
+        if (_selection.BoundsContainDoc(docX, docY))
             return TransformHandle.Move;
         return TransformHandle.None;
     }
@@ -83,6 +87,7 @@ public sealed class SelectionEditSession
 public sealed class SelectionScaleInteraction
 {
     private readonly SelectionState _selection;
+    private readonly SelectionState _start;
     private readonly double _startX, _startY, _startW, _startH;
     private readonly double _handleLocalX, _handleLocalY;
     private readonly double _oppLocalX, _oppLocalY;
@@ -91,6 +96,7 @@ public sealed class SelectionScaleInteraction
     public SelectionScaleInteraction(SelectionState selection, TransformHandle handle)
     {
         _selection = selection;
+        _start = selection.Clone();
         _startX = selection.X;
         _startY = selection.Y;
         _startW = selection.Width;
@@ -161,7 +167,7 @@ public sealed class SelectionScaleInteraction
         int iy = (int)Math.Round(centerY1 - newHalfH);
         int iw = Math.Max(1, (int)Math.Round(newW));
         int ih = Math.Max(1, (int)Math.Round(newH));
-        _selection.Set(ix, iy, iw, ih);
+        _selection.SetScaled(_start, ix, iy, iw, ih);
     }
 
     private static (double x, double y) HandleLocal(TransformHandle handle, double hw, double hh) => handle switch

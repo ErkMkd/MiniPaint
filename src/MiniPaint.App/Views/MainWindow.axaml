@@ -28,7 +28,9 @@
         <Separator />
         <MenuItem Header="_Save Project..." Command="{Binding SaveProjectCommand}" InputGesture="Ctrl+S" />
         <MenuItem Header="_Export PNG..." Command="{Binding ExportPngCommand}" InputGesture="Ctrl+Shift+E" />
+        <MenuItem Header="Export _JPG..." Command="{Binding ExportJpgCommand}" />
         <MenuItem Header="Export IFF-_ILBM..." Command="{Binding ExportIlbmCommand}" />
+        <MenuItem Header="Export _All Images..." Command="{Binding ExportAllCommand}" />
         <Separator />
         <MenuItem Header="_Close" Command="{Binding CloseDocumentCommand}" InputGesture="Ctrl+W" />
       </MenuItem>
@@ -40,19 +42,25 @@
         <MenuItem Header="_Copy" Command="{Binding CopyCommand}" InputGesture="Ctrl+C" />
         <MenuItem Header="_Paste" Command="{Binding PasteCommand}" InputGesture="Ctrl+V" />
         <Separator />
-        <MenuItem Header="Select _All" Command="{Binding SelectAllCommand}" InputGesture="Ctrl+A" />
-        <MenuItem Header="_Deselect" Command="{Binding DeselectCommand}" InputGesture="Ctrl+D" />
-        <MenuItem Header="_Transform Selection" Command="{Binding SetToolSelectionEditCommand}" InputGesture="Ctrl+Alt+T" />
-        <Separator />
         <MenuItem Header="_Free Transform" Command="{Binding ToggleFreeTransformCommand}" InputGesture="Ctrl+T" />
         <MenuItem Header="_Apply Transform" Command="{Binding CommitTransformCommand}" InputGesture="Enter" />
         <MenuItem Header="Cancel Transform" Command="{Binding CancelTransformCommand}" InputGesture="Escape" />
+      </MenuItem>
+      <MenuItem Header="_Select">
+        <MenuItem Header="_All" Command="{Binding SelectAllCommand}" InputGesture="Ctrl+A" />
+        <MenuItem Header="_Deselect" Command="{Binding DeselectCommand}" InputGesture="Ctrl+D" />
+        <MenuItem Header="_Inverse" Command="{Binding InverseSelectionCommand}" InputGesture="Ctrl+Shift+I" />
+        <MenuItem Header="Color _Range..." Command="{Binding ColorRangeCommand}" />
+        <Separator />
+        <MenuItem Header="_Transform Selection" Command="{Binding SetToolSelectionEditCommand}" InputGesture="Ctrl+Alt+T" />
       </MenuItem>
       <MenuItem Header="_Image">
         <MenuItem Header="_Mode..." Command="{Binding ImageModeCommand}" InputGesture="Ctrl+Shift+M" />
         <MenuItem Header="_Palette..." Command="{Binding EditPaletteCommand}" InputGesture="Ctrl+Shift+P" />
         <MenuItem Header="_Image Size..." Command="{Binding ImageSizeCommand}" InputGesture="Ctrl+Alt+I" />
         <MenuItem Header="_Canvas Size..." Command="{Binding CanvasSizeCommand}" InputGesture="Ctrl+Alt+C" />
+        <Separator />
+        <MenuItem Header="_Resize All Images..." Command="{Binding ResizeAllCommand}" />
       </MenuItem>
       <MenuItem Header="_View">
         <MenuItem Header="_Fit to Window" Command="{Binding FitToWindowCommand}" InputGesture="Ctrl+0" />
@@ -102,11 +110,17 @@
       <!-- Toolbox -->
       <Border Grid.Column="0" Background="#333337" BorderBrush="#3F3F46" BorderThickness="0,0,1,0">
         <StackPanel Margin="4" Spacing="4">
-          <Button ToolTip.Tip="Rectangular Selection (V) — drag inside moves selection; Ctrl+D to clear before new marquee"
+          <Button ToolTip.Tip="Rectangular Selection (V) — Shift add · Alt subtract · Shift+Alt intersect · drag inside moves the outline · click outside deselects"
                   Command="{Binding SetToolSelectCommand}"
                   Background="{Binding CurrentTool, Converter={x:Static ctrl:ToolHighlightConverter.Instance}, ConverterParameter=RectSelect}"
                   HorizontalAlignment="Stretch" Height="44" Padding="6">
             <Image Source="/Assets/Icons/rect-select.png" Width="28" Height="28" Stretch="Uniform" />
+          </Button>
+          <Button ToolTip.Tip="Magic Wand (W) — click a color · Shift add · Alt subtract · Shift+Alt intersect"
+                  Command="{Binding SetToolMagicWandCommand}"
+                  Background="{Binding CurrentTool, Converter={x:Static ctrl:ToolHighlightConverter.Instance}, ConverterParameter=MagicWand}"
+                  HorizontalAlignment="Stretch" Height="44" Padding="6">
+            <Image Source="/Assets/Icons/magic-wand.png" Width="28" Height="28" Stretch="Uniform" />
           </Button>
           <Button ToolTip.Tip="Transform Selection (Ctrl+Alt+T) — resize selection handles"
                   Command="{Binding SetToolSelectionEditCommand}"
@@ -182,10 +196,49 @@
                     Command="{Binding CancelSelectionEditCommand}" />
           </Grid>
         </Border>
+        <Border DockPanel.Dock="Top" Background="#2D2D30" Padding="8,4"
+                IsVisible="{Binding ShowSelectionOptions}">
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <TextBlock Text="Selection" VerticalAlignment="Center" FontSize="11" Foreground="#AAA" />
+            <RadioButton GroupName="SelectionMode" Content="New" VerticalAlignment="Center"
+                         ToolTip.Tip="Replace the selection"
+                         IsChecked="{Binding IsSelectionModeReplace}" />
+            <RadioButton GroupName="SelectionMode" Content="Add" VerticalAlignment="Center"
+                         ToolTip.Tip="Add to the selection (or hold Shift)"
+                         IsChecked="{Binding IsSelectionModeAdd}" />
+            <RadioButton GroupName="SelectionMode" Content="Subtract" VerticalAlignment="Center"
+                         ToolTip.Tip="Subtract from the selection (or hold Alt)"
+                         IsChecked="{Binding IsSelectionModeSubtract}" />
+            <RadioButton GroupName="SelectionMode" Content="Intersect" VerticalAlignment="Center"
+                         ToolTip.Tip="Keep the overlap (or hold Shift+Alt)"
+                         IsChecked="{Binding IsSelectionModeIntersect}" />
+
+            <StackPanel Orientation="Horizontal" Spacing="6" Margin="16,0,0,0"
+                        IsVisible="{Binding IsMagicWandTool}">
+              <TextBlock Text="Tolerance" VerticalAlignment="Center" FontSize="11" Foreground="#AAA" />
+              <NumericUpDown Width="110" Minimum="0" Maximum="255" Increment="1" FormatString="0"
+                             ToolTip.Tip="0 = exact color only; higher = more similar colors"
+                             Value="{Binding WandToleranceValue}" />
+              <CheckBox Content="Contiguous" VerticalAlignment="Center"
+                        ToolTip.Tip="Only pixels connected to the click; unchecked selects the color everywhere"
+                        IsChecked="{Binding WandContiguous}" />
+              <CheckBox Content="Anti-alias" VerticalAlignment="Center"
+                        ToolTip.Tip="Soft edge (photos). Leave off for pixel art."
+                        IsChecked="{Binding WandAntiAlias}" />
+              <TextBlock Text="Sample" VerticalAlignment="Center" FontSize="11" Foreground="#AAA" Margin="8,0,0,0" />
+              <ComboBox Width="140" VerticalAlignment="Center"
+                        ToolTip.Tip="Visible image matches palette colors exactly in Indexed / ECS / AGA"
+                        ItemsSource="{Binding WandSamples}"
+                        SelectedItem="{Binding SelectedWandSample}" />
+            </StackPanel>
+          </StackPanel>
+        </Border>
         <Border Background="#1E1E1E">
           <ctrl:ImageCanvas x:Name="Canvas"
                             Workspace="{Binding ActiveWorkspace}"
-                            Tool="{Binding CurrentTool}" />
+                            Tool="{Binding CurrentTool}"
+                            SelectionMode="{Binding SelectionMode}"
+                            WandOptions="{Binding WandOptions}" />
         </Border>
       </DockPanel>
 
