@@ -41,6 +41,8 @@ artifacts/
 *.dylib
 # macOS bundles only (do NOT use *.app — it ignores MiniPaint.App/)
 *.app/
+# ...but *.app/ still matches the MiniPaint.App/ folder (case-insensitive on Windows): re-include it.
+!/src/MiniPaint.App/
 
 # Keep launcher script (not a binary)
 !MiniPaint.bat
