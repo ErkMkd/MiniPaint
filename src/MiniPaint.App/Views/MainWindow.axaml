@@ -122,6 +122,14 @@
                   HorizontalAlignment="Stretch" Height="44" Padding="6">
             <Image Source="/Assets/Icons/magic-wand.png" Width="28" Height="28" Stretch="Uniform" />
           </Button>
+          <Button ToolTip.Tip="{Binding ObjectSelectionTip}"
+                  ToolTip.ShowOnDisabled="True"
+                  Command="{Binding SetToolObjectSelectCommand}"
+                  IsEnabled="{Binding IsObjectSelectionAvailable}"
+                  Background="{Binding CurrentTool, Converter={x:Static ctrl:ToolHighlightConverter.Instance}, ConverterParameter=ObjectSelect}"
+                  HorizontalAlignment="Stretch" Height="44" Padding="6">
+            <Image Source="/Assets/Icons/object-select.png" Width="28" Height="28" Stretch="Uniform" />
+          </Button>
           <Button ToolTip.Tip="Transform Selection (Ctrl+Alt+T) — resize selection handles"
                   Command="{Binding SetToolSelectionEditCommand}"
                   Background="{Binding CurrentTool, Converter={x:Static ctrl:ToolHighlightConverter.Instance}, ConverterParameter=SelectionEdit}"
@@ -230,6 +238,15 @@
                         ToolTip.Tip="Visible image matches palette colors exactly in Indexed / ECS / AGA"
                         ItemsSource="{Binding WandSamples}"
                         SelectedItem="{Binding SelectedWandSample}" />
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" Spacing="10" Margin="16,0,0,0"
+                        IsVisible="{Binding IsObjectSelectTool}">
+              <CheckBox Content="Soft edges" VerticalAlignment="Center"
+                        ToolTip.Tip="Anti-aliased object edges (photos). Off gives hard pixel edges."
+                        IsChecked="{Binding ObjectSoftEdges}" />
+              <TextBlock Text="Click an object, or drag a box around it · AI runs locally"
+                         VerticalAlignment="Center" FontSize="11" Foreground="#AAA" />
             </StackPanel>
           </StackPanel>
         </Border>

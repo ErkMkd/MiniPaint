@@ -78,3 +78,6 @@ Desktop.ini
 *.deps.json
 *.runtimeconfig.json
 *.runtimeconfig.dev.json
+
+# AI models downloaded by scripts/Get-Models.ps1 (kept out of git)
+/models/

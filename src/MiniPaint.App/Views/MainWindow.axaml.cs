@@ -54,6 +54,7 @@ public partial class MainWindow : Window
             Vm.ZoomText = Vm.ActiveWorkspace is { } w ? $"{w.Zoom * 100:0.#}%" : "";
         };
         Canvas.TransformModeChanged += () => Vm.SyncTransformUi();
+        Canvas.ObjectSelectionRequested += (prompt, mode) => _ = Vm.ObjectSelectAsync(prompt, mode);
 
         // Start with a blank document so the app is immediately usable.
         if (Vm.Tabs.Count == 0)
@@ -181,6 +182,7 @@ public partial class MainWindow : Window
         else if (e.Key == Key.V && !vm.IsTransforming) { vm.SetToolSelectCommand.Execute(null); e.Handled = true; }
         else if (e.Key == Key.M && !vm.IsTransforming) { vm.SetToolMoveCommand.Execute(null); e.Handled = true; }
         else if (e.Key == Key.W && !vm.IsTransforming) { vm.SetToolMagicWandCommand.Execute(null); e.Handled = true; }
+        else if (e.Key == Key.Q && !vm.IsTransforming) { vm.SetToolObjectSelectCommand.Execute(null); e.Handled = true; }
         else if (e.Key == Key.H && !vm.IsTransforming) { vm.SetToolPanCommand.Execute(null); e.Handled = true; }
     }
 

@@ -10,6 +10,7 @@ using MiniPaint.Core.History;
 using MiniPaint.Core.Imaging;
 using MiniPaint.Core.Selection;
 using MiniPaint.Core.Transform;
+using MiniPaint.Segmentation;
 
 namespace MiniPaint.App.Controls;
 
@@ -18,6 +19,7 @@ public enum CanvasTool
     Pan,
     RectSelect,
     MagicWand,
+    ObjectSelect,
     SelectionEdit,
     MoveLayer,
     FreeTransform
@@ -66,6 +68,11 @@ public sealed class ImageCanvas : Control
     private SelectionSnapshot? _selBefore;
     private string _selGestureName = "";
     private SelectionSnapshot? _floatSelBefore;
+
+    /// <summary>Object Selection gesture in progress (box shown with the marquee fields).</summary>
+    private bool _objectDragging;
+    private SelectionCombineMode _objectMode;
+    private Point _objectPressScreen;
 
     /// <summary>Above this many outline segments the ants stop animating (redraw cost).</summary>
     private const int AntsAnimationSegmentLimit = 20_000;
@@ -117,6 +124,9 @@ public sealed class ImageCanvas : Control
     public event Action? StatusChanged;
     public event Action? TransformModeChanged;
 
+    /// <summary>Object Selection: a click (point) or dragged box, and how to combine the result.</summary>
+    public event Action<SamPrompt, SelectionCombineMode>? ObjectSelectionRequested;
+
     public int CursorDocX { get; private set; }
     public int CursorDocY { get; private set; }
 
@@ -134,7 +144,7 @@ public sealed class ImageCanvas : Control
         {
             _antsPhase = (_antsPhase + 1) % 16;
             var ws = Workspace;
-            if (_selecting ||
+            if (_selecting || _objectDragging ||
                 ws?.IsTransforming == true ||
                 ws?.IsEditingSelection == true ||
                 (ws?.Selection.HasSelection == true &&
@@ -321,6 +331,19 @@ public sealed class ImageCanvas : Control
             e.Handled = true;
             InvalidateVisual();
             StatusChanged?.Invoke();
+            return;
+        }
+
+        if (Tool == CanvasTool.ObjectSelect)
+        {
+            // Press–release without moving = click on an object; a drag = box around it.
+            (_selStartX, _selStartY) = ws.ScreenToDocument(p.X, p.Y);
+            (_selCurX, _selCurY) = (_selStartX, _selStartY);
+            _objectMode = CombineModeFrom(e.KeyModifiers);
+            _objectPressScreen = p;
+            _objectDragging = true;
+            e.Pointer.Capture(this);
+            e.Handled = true;
             return;
         }
 
@@ -707,7 +730,7 @@ public sealed class ImageCanvas : Control
             return;
         }
 
-        if (_selecting)
+        if (_selecting || _objectDragging)
         {
             (_selCurX, _selCurY) = ws.ScreenToDocument(p.X, p.Y);
             InvalidateVisual();
@@ -747,7 +770,7 @@ public sealed class ImageCanvas : Control
         {
             Cursor = new Cursor(StandardCursorType.SizeAll);
         }
-        else if (Tool == CanvasTool.MagicWand)
+        else if (Tool is CanvasTool.MagicWand or CanvasTool.ObjectSelect)
         {
             Cursor = new Cursor(StandardCursorType.Cross);
         }
@@ -791,6 +814,18 @@ public sealed class ImageCanvas : Control
 
         if (_selecting && ws is not null)
             ApplyMarquee(ws);
+
+        if (_objectDragging && ws is not null)
+        {
+            _objectDragging = false;
+            var release = e.GetPosition(this);
+            bool isClick = Math.Abs(release.X - _objectPressScreen.X) < 4 && Math.Abs(release.Y - _objectPressScreen.Y) < 4;
+            var prompt = isClick
+                ? SamPrompt.Point(_selStartX + 0.5, _selStartY + 0.5)
+                : SamPrompt.Box(_selStartX, _selStartY, _selCurX, _selCurY);
+            InvalidateVisual();
+            ObjectSelectionRequested?.Invoke(prompt, _objectMode);
+        }
 
         if ((_selecting || _movingSelection || _selScaleIx is not null) && ws is not null)
         {
@@ -893,7 +928,7 @@ public sealed class ImageCanvas : Control
         else if (ws.Selection.HasSelection)
             DrawMarchingAnts(context, ws);
 
-        if (_selecting)
+        if (_selecting || _objectDragging)
             DrawMarquee(context, ws);
     }
 

@@ -18,12 +18,16 @@ Local Windows 2D image editor — C# / .NET 10, Avalonia UI, SkiaSharp.
 
 ```powershell
 cd d:\MiniPaint
+.\scripts\Get-Models.ps1          # AI model for Object Selection (~45 MB, once; build-debug.bat does it)
 dotnet restore MiniPaint.slnx
 dotnet build MiniPaint.slnx
 dotnet test
 dotnet run --project src\MiniPaint.App
-# or: MiniPaint.bat
+# or: build-debug.bat run
 ```
+
+The MobileSAM model files go to `models\MobileSAM\` (kept out of git, SHA-256 checked). Without them
+everything works except **Object Selection**, which is disabled.
 
 ## Publish & pin to the Windows taskbar
 
@@ -47,7 +51,7 @@ After each meaningful build you want on the taskbar:
 .\publish.bat
 ```
 
-That **deletes** `publish\`, increments `build-number.txt`, publishes as version `1.0.<n>`, regenerates `MiniPaint.lnk`, then by default **commits/pushes** the counter to `main` and creates a **GitHub Release** (`v1.0.<n>` + zip under `dist\`).
+That **deletes** `publish\`, downloads the AI model if missing, increments `build-number.txt`, publishes the version written in `version.txt` (then bumps its patch for the next publish: 1.1.0 → 1.1.1), regenerates `MiniPaint.lnk`, then by default **commits/pushes** both counters to `main` and creates a **GitHub Release** (`v<version>` + zip under `dist\`). Edit `version.txt` to start a new minor or major version; the build counter remains the 4th part of the file version.
 
 ```powershell
 .\publish.bat                 # full: publish + push + Release
@@ -71,6 +75,7 @@ In the app: **Help → Open Log Folder**.
 - **Export All Images** — every open tab into one folder as PNG or JPG (one JPG quality for all); file names from tab names, numbered instead of overwriting unless asked
 - **Layers** — add / delete / duplicate / rename, reorder, visibility, opacity, Photoshop-style blend modes, Move tool; context menu **New Image from Layer Content** (trim to opaque bounds)
 - **Selection** — mask-based (any shape, soft edges) with marching ants along the outline; rectangular marquee and **Magic Wand** (W: tolerance, contiguous, anti-alias, sample visible image or current layer — exact palette colors in Indexed / ECS / AGA); New / Add / Subtract / Intersect from the options bar or Shift / Alt / Shift+Alt; **Select** menu: All, Deselect, Inverse (Ctrl+Shift+I), **Color Range** (pick colors from a preview, Shift / Alt to add / remove, fuzziness for soft edges, live black & white preview); move the outline (V) or lift & drag selected pixels with Move (M); copy / cut / paste as new layers across documents; selection changes are undoable
+- **Object Selection** (Q) — AI selection that runs locally (MobileSAM via ONNX Runtime on the CPU, no network): click an object or drag a box around it; Shift / Alt / Shift+Alt combine; optional soft edges; the image is analyzed once in the background (~0.5 s), then each click answers in a few tens of ms
 - **Transform Selection** (Ctrl+Alt+T) — resize/move the marquee only (Shift aspect, Alt from center)
 - **Free Transform** (Ctrl+T) — scale / rotate / move a layer; with an active selection, lifts the selection content (like Move), transforms the float, then pastes back and updates the marquee; Enter apply · Esc cancel
 - **Image Mode** (Ctrl+Shift+M) — live color constraint: **RGBA**, **Indexed**, **ECS** (12-bit / 4096 palette, optional Half-Brite), **AGA** (2–256 colors); quantizers Median Cut, Octree, Wu, K-Means++, NeuQuant; dither None / Floyd–Steinberg / Bayer 4×4 & 8×8 / Atkinson / Stucki / Blue Noise; Preview toggle; OK commits undoably
@@ -84,8 +89,10 @@ In the app: **Help → Open Log Folder**.
 ## Solution layout
 
 - `src/MiniPaint.Core` — document model, composition, selection, transform, color modes, clipboard, history, PNG / JPG / IFF / project I/O, batch resize & export
+- `src/MiniPaint.Segmentation` — Object Selection: MobileSAM pre/post-processing and ONNX Runtime inference
 - `src/MiniPaint.App` — Avalonia editor UI, splash, toolbox icons, dialogs
 - `tests/MiniPaint.Core.Tests` — pixels, composition, transform, selection, color modes, serialization
+- `tests/MiniPaint.Segmentation.Tests` — prompt / mask processing; end-to-end model tests when the model is downloaded
 
 ## Credits
 
@@ -94,3 +101,5 @@ Développé par Cursor, orchestré par Eric Kernin.
 ## License
 
 MIT — Copyright (c) 2026 Éric Kernin / ErkMkd. See [LICENSE](LICENSE).
+
+Object Selection uses MobileSAM (Apache-2.0), Segment Anything (Apache-2.0) and ONNX Runtime (MIT); see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), also shipped next to `MiniPaint.exe`.

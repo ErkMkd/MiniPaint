@@ -11,7 +11,9 @@ using MiniPaint.Core.Document;
 using MiniPaint.Core.History;
 using MiniPaint.Core.Imaging;
 using MiniPaint.Core.Project;
+using MiniPaint.App.Services;
 using MiniPaint.Core.Selection;
+using MiniPaint.Segmentation;
 
 namespace MiniPaint.App.ViewModels;
 
@@ -26,6 +28,9 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     private ExportFormat _lastExportFormat = ExportFormat.Png;
     private BatchResizeOptions? _lastResizeAllOptions;
     private int _colorRangeFuzziness = 40;
+
+    private readonly ObjectSelectionService _objectSelection = new();
+    private bool _objectSelectionBusy;
 
     public ObservableCollection<DocumentTabViewModel> Tabs { get; } = new();
     public ObservableCollection<LayerItemViewModel> Layers { get; } = new();
@@ -94,7 +99,21 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     public bool IsMagicWandTool => CurrentTool == CanvasTool.MagicWand;
 
     public bool ShowSelectionOptions =>
-        (CurrentTool is CanvasTool.RectSelect or CanvasTool.MagicWand) && !IsTransforming && !IsEditingSelection;
+        (CurrentTool is CanvasTool.RectSelect or CanvasTool.MagicWand or CanvasTool.ObjectSelect) &&
+        !IsTransforming && !IsEditingSelection;
+
+    // --- Object Selection (MobileSAM, local) ---
+
+    /// <summary>Anti-aliased object edges (photos); off gives hard pixel edges.</summary>
+    [ObservableProperty] public partial bool ObjectSoftEdges { get; set; } = true;
+
+    public bool IsObjectSelectTool => CurrentTool == CanvasTool.ObjectSelect;
+
+    public bool IsObjectSelectionAvailable => _objectSelection.IsAvailable;
+
+    public string ObjectSelectionTip => _objectSelection.IsAvailable
+        ? "Object Selection (Q) — click an object or drag a box around it · Shift add · Alt subtract · Shift+Alt intersect"
+        : "Object Selection — AI model not installed: run scripts\\Get-Models.ps1, then rebuild";
 
     partial void OnSelectionModeChanged(SelectionCombineMode value)
     {
@@ -112,6 +131,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     partial void OnCurrentToolChanged(CanvasTool value)
     {
         OnPropertyChanged(nameof(IsMagicWandTool));
+        OnPropertyChanged(nameof(IsObjectSelectTool));
         OnPropertyChanged(nameof(ShowSelectionOptions));
     }
 
@@ -165,6 +185,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     {
         if (value is not null)
             _manager.Activate(value.Workspace);
+        if (value is not null && CurrentTool == CanvasTool.ObjectSelect)
+            _objectSelection.Prewarm(value.Workspace);
         OnPropertyChanged(nameof(ActiveWorkspace));
         RefreshLayers();
         UpdateStatus();
@@ -1082,6 +1104,54 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     }
 
     [RelayCommand]
+    private void SetToolObjectSelect()
+    {
+        if (!_objectSelection.IsAvailable)
+        {
+            StatusText = "Object Selection needs the AI model: run scripts\\Get-Models.ps1, then rebuild.";
+            return;
+        }
+        if (ActiveWorkspace?.IsTransforming == true) ActiveWorkspace.CancelTransform();
+        if (ActiveWorkspace?.IsEditingSelection == true) ActiveWorkspace.CommitSelectionEdit();
+        CurrentTool = CanvasTool.ObjectSelect;
+        SyncTransformUi();
+        // Load the model and analyze the image now, so the first click answers at once.
+        if (ActiveWorkspace is { } ws)
+            _objectSelection.Prewarm(ws);
+    }
+
+    /// <summary>
+    /// Object Selection click (point) or drag (box) from the canvas, combined with the selection.
+    /// Ignored while a previous request is still running.
+    /// </summary>
+    public async Task ObjectSelectAsync(SamPrompt prompt, SelectionCombineMode mode)
+    {
+        var ws = ActiveWorkspace;
+        if (ws is null || _objectSelectionBusy || !_objectSelection.IsAvailable) return;
+
+        _objectSelectionBusy = true;
+        StatusText = _objectSelection.NeedsAnalysis(ws) ? "Analyzing image…" : "Selecting object…";
+        try
+        {
+            var picked = await _objectSelection.SelectAsync(ws, prompt, ObjectSoftEdges);
+            if (!_manager.Workspaces.Contains(ws)) return; // tab closed meanwhile
+
+            ws.ApplySelection(picked, mode, "Object Selection");
+            SyncTransformUi();
+            StatusText = picked.HasSelection ? "Object selected" : "No object found there";
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Object Selection failed", ex);
+            StatusText = "Object Selection failed — see log";
+        }
+        finally
+        {
+            _objectSelectionBusy = false;
+        }
+    }
+
+    [RelayCommand]
     private void SetToolMagicWand()
     {
         if (ActiveWorkspace?.IsTransforming == true) ActiveWorkspace.CancelTransform();
@@ -1297,6 +1367,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     public void Dispose()
     {
         _manager.Dispose();
+        _objectSelection.Dispose();
         GC.SuppressFinalize(this);
     }
 }

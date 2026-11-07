@@ -49,5 +49,14 @@
 
   <ItemGroup>
     <ProjectReference Include="..\MiniPaint.Core\MiniPaint.Core.csproj" />
+    <ProjectReference Include="..\MiniPaint.Segmentation\MiniPaint.Segmentation.csproj" />
+  </ItemGroup>
+
+  <!-- Object Selection models, fetched by scripts\Get-Models.ps1 (the tool is disabled when absent). -->
+  <ItemGroup>
+    <None Include="..\..\models\MobileSAM\*.onnx" Link="Models\MobileSAM\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Visible="false" />
+    <None Include="..\..\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

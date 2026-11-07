@@ -2,8 +2,10 @@
   <Folder Name="/src/">
     <Project Path="src/MiniPaint.App/MiniPaint.App.csproj" />
     <Project Path="src/MiniPaint.Core/MiniPaint.Core.csproj" />
+    <Project Path="src/MiniPaint.Segmentation/MiniPaint.Segmentation.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/MiniPaint.Core.Tests/MiniPaint.Core.Tests.csproj" />
+    <Project Path="tests/MiniPaint.Segmentation.Tests/MiniPaint.Segmentation.Tests.csproj" />
   </Folder>
 </Solution>

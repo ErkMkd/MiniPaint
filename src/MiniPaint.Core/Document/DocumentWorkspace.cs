@@ -242,9 +242,7 @@ public sealed class DocumentWorkspace : IDisposable
             picked = MagicWand.Select(layerOnCanvas, docX, docY, options);
         }
 
-        var before = Selection.Capture();
-        Selection.Combine(picked, mode);
-        RecordSelectionChange("Magic Wand", before);
+        ApplySelection(picked, mode, "Magic Wand");
     }
 
     /// <summary>
@@ -257,10 +255,24 @@ public sealed class DocumentWorkspace : IDisposable
         if (IsEditingSelection)
             CancelSelectionEdit();
 
-        var picked = ColorRange.Select(GetComposite(), options);
+        ApplySelection(ColorRange.Select(GetComposite(), options), mode, "Color Range");
+    }
+
+    /// <summary>
+    /// Combine a computed selection (wand, color range, object selection…) into the current one
+    /// as a single undo step named <paramref name="name"/>.
+    /// </summary>
+    public void ApplySelection(SelectionState picked, SelectionCombineMode mode, string name)
+    {
+        ArgumentNullException.ThrowIfNull(picked);
+        if (IsTransforming) return;
+        if (IsEditingSelection)
+            CancelSelectionEdit();
+
         var before = Selection.Capture();
         Selection.Combine(picked, mode);
-        RecordSelectionChange("Color Range", before);
+        Selection.ClampToDocument(Document.Width, Document.Height);
+        RecordSelectionChange(name, before);
     }
 
     /// <summary>
