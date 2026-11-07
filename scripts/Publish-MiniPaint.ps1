@@ -5,6 +5,11 @@
   bumps build-number.txt, refreshes the pin shortcut, then (by default)
   commits/pushes the counter to GitHub and creates a Release with a zip asset.
 
+  The release version comes from version.txt (major.minor.patch, e.g. 1.1.0). After a
+  successful publish its patch is bumped for the next one (1.1.0 -> 1.1.1); edit the file
+  to start a new minor or major version. The build counter stays as the 4th part of the
+  file version (1.1.0.<build>) so every publish remains traceable.
+
 .PARAMETER SkipGit
   Do not commit/push build-number.txt.
 
@@ -24,6 +29,7 @@ $OutDir = Join-Path $Root "publish"
 $DistDir = Join-Path $Root "dist"
 $Exe = Join-Path $OutDir "MiniPaint.exe"
 $BuildNumberFile = Join-Path $Root "build-number.txt"
+$VersionFile = Join-Path $Root "version.txt"
 $Repo = "ErkMkd/MiniPaint"
 
 function Get-GitHubToken {
@@ -45,16 +51,23 @@ if (Test-Path $BuildNumberFile) {
   [void][int]::TryParse($raw, [ref]$previous)
 }
 $build = $previous + 1
-Set-Content -LiteralPath $BuildNumberFile -Value "$build" -Encoding ascii -NoNewline
-$version = "1.0.$build"
-$fileVersion = "1.0.$build.0"
+
+# --- release version from version.txt ---
+$version = if (Test-Path $VersionFile) { (Get-Content -LiteralPath $VersionFile -Raw).Trim() } else { "" }
+if ($version -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
+  throw "version.txt must contain the next release version as major.minor.patch (e.g. 1.1.0), found '$version'."
+}
+$nextVersion = "$($Matches[1]).$($Matches[2]).$([int]$Matches[3] + 1)"
+$fileVersion = "$version.$build"
 $tag = "v$version"
+
+Set-Content -LiteralPath $BuildNumberFile -Value "$build" -Encoding ascii -NoNewline
 
 Write-Host ""
 Write-Host "MiniPaint - Release publish (self-contained win-x64)" -ForegroundColor Cyan
 Write-Host "  Project : $Project"
 Write-Host "  Output  : $OutDir  (previous build will be deleted)"
-Write-Host "  Version : $version  (build $previous -> $build, tracked in build-number.txt)"
+Write-Host "  Version : $version  (from version.txt; build $previous -> $build, tracked in build-number.txt)"
 Write-Host ""
 
 # Wipe previous publish so leftover DLLs from older builds cannot linger.
@@ -96,6 +109,9 @@ if (-not (Test-Path $Exe)) {
 $versionText = "MiniPaint $version`r`nBuild $build`r`nPublished $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`r`n"
 [System.IO.File]::WriteAllText((Join-Path $OutDir "VERSION.txt"), $versionText)
 
+# Published: the next publish gets the following patch version.
+Set-Content -LiteralPath $VersionFile -Value "$nextVersion" -Encoding ascii -NoNewline
+
 & (Join-Path $PSScriptRoot "Create-PinShortcut.ps1")
 
 Write-Host ""
@@ -111,14 +127,14 @@ if (-not $SkipGit) {
   Write-Host "GitHub: commit + push build-number.txt ..." -ForegroundColor Cyan
   Push-Location $Root
   try {
-    & git add -- "build-number.txt"
-    $pending = & git status --porcelain -- "build-number.txt"
+    & git add -- "build-number.txt" "version.txt"
+    $pending = & git status --porcelain -- "build-number.txt" "version.txt"
     if ($pending) {
       & git commit -m "Bump build to $build ($version)."
       if ($LASTEXITCODE -ne 0) { throw "git commit failed" }
     }
     else {
-      Write-Host "  (build-number.txt already committed)"
+      Write-Host "  (build-number.txt / version.txt already committed)"
     }
 
     # Push the commit we just made (current HEAD), even if we are on a feature branch.
