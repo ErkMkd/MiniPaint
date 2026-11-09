@@ -1,6 +1,7 @@
 using MiniPaint.Core.Clipboard;
 using MiniPaint.Core.ColorMode;
 using MiniPaint.Core.Composition;
+using MiniPaint.Core.Filters;
 using MiniPaint.Core.History;
 using MiniPaint.Core.Imaging;
 using MiniPaint.Core.Project;
@@ -176,6 +177,212 @@ public sealed class DocumentWorkspace : IDisposable
         var after = layer.Pixels.Clone();
         History.Record(new LayerPixelsCommand("Cut", layer, before, after, NotifyChanged));
         NotifyChanged();
+    }
+
+    /// <summary>
+    /// Put <paramref name="node"/> just above <paramref name="below"/> (in the same group) and make
+    /// it active, as one undo step named <paramref name="name"/>. False when <paramref name="below"/>
+    /// is no longer in the document or a transform is in progress.
+    /// </summary>
+    public bool InsertNodeAbove(LayerNode below, LayerNode node, string name)
+    {
+        ArgumentNullException.ThrowIfNull(below);
+        ArgumentNullException.ThrowIfNull(node);
+        if (IsTransforming || !IsInDocument(below)) return false;
+        var (parent, index) = Document.PositionOf(below);
+        History.Execute(new InsertNodeCommand(name, Document, node, parent, index + 1, NotifyChanged));
+        return true;
+    }
+
+    // --- Layer stack: groups and order ---
+
+    /// <summary>A new empty layer above the active layer, or on top inside the active group.</summary>
+    public Layer AddLayerAboveActive(string name)
+    {
+        var layer = new Layer(name, Document.Width, Document.Height);
+        AddAtActive(layer, "Add Layer");
+        return layer;
+    }
+
+    /// <summary>A new empty group above the active layer, or on top inside the active group.</summary>
+    public LayerGroup AddGroupAboveActive(string name)
+    {
+        var group = new LayerGroup(name);
+        AddAtActive(group, "New Group");
+        return group;
+    }
+
+    private void AddAtActive(LayerNode node, string name)
+    {
+        var (parent, index) = Document.ActiveNode switch
+        {
+            LayerGroup group => (group, group.Children.Count),
+            { } active => (Document.PositionOf(active).Parent, Document.PositionOf(active).Index + 1),
+            null => (Document.Root, Document.Root.Children.Count)
+        };
+        History.Execute(new InsertNodeCommand(name, Document, node, parent, index, NotifyChanged));
+    }
+
+    /// <summary>Layer → Group Layer: put <paramref name="node"/> into a new group at its place (one undo step).</summary>
+    public LayerGroup? GroupNode(LayerNode node, string groupName)
+    {
+        if (IsTransforming || !IsInDocument(node)) return null;
+        var (parent, index) = Document.PositionOf(node);
+        var group = new LayerGroup(groupName);
+        var insert = new InsertNodeCommand("Group Layer", Document, group, parent, index + 1);
+        insert.Execute();
+        var move = new MoveNodeCommand("Group Layer", Document, node, group, 0);
+        move.Execute();
+        History.Record(new CompoundCommand("Group Layer", insert, move)); // the group is active
+        return group;
+    }
+
+    /// <summary>Layer → Ungroup: the group's content takes its place, the group goes (one undo step).</summary>
+    public bool Ungroup(LayerGroup group)
+    {
+        if (IsTransforming || !IsInDocument(group)) return false;
+        var (parent, index) = Document.PositionOf(group);
+        var steps = new List<IEditCommand>();
+        var children = group.Children.ToList();
+        for (int i = 0; i < children.Count; i++)
+        {
+            var move = new MoveNodeCommand("Ungroup", Document, children[i], parent, index + i);
+            move.Execute();
+            steps.Add(move);
+        }
+        var delete = new DeleteNodeCommand(Document, group);
+        delete.Execute();
+        steps.Add(delete);
+        if (children.Count > 0)
+            Document.ActiveLayerId = children[^1].Id;
+        History.Record(new CompoundCommand("Ungroup", steps.ToArray()));
+        return true;
+    }
+
+    /// <summary>Move Up / Move Down through the stack, in and out of open groups. False at the end.</summary>
+    public bool MoveNode(LayerNode node, bool up)
+    {
+        if (IsTransforming || !IsInDocument(node)) return false;
+        if ((up ? Document.StepUp(node) : Document.StepDown(node)) is not { } target) return false;
+        History.Execute(new MoveNodeCommand(up ? "Move Layer Up" : "Move Layer Down", Document, node, target.Parent, target.Index, NotifyChanged));
+        return true;
+    }
+
+    /// <summary>Delete a layer or a group with its content. False for the document's last layer.</summary>
+    public bool DeleteNode(LayerNode node)
+    {
+        if (IsTransforming || !IsInDocument(node)) return false;
+        int inside = node.SelfAndDescendants().OfType<Layer>().Count();
+        if (inside > 0 && inside >= Document.Layers.Count) return false;
+        History.Execute(new DeleteNodeCommand(Document, node, NotifyChanged));
+        return true;
+    }
+
+    /// <summary>A copy (with its content) just above the entry, made active.</summary>
+    public LayerNode? DuplicateNode(LayerNode node)
+    {
+        if (IsTransforming || !IsInDocument(node)) return null;
+        var copy = node.CloneNode();
+        InsertNodeAbove(node, copy, node is LayerGroup ? "Duplicate Group" : "Duplicate Layer");
+        return copy;
+    }
+
+    // --- Filters ---
+
+    /// <summary>Replace the filters of an entry, as one undo step named <paramref name="name"/>.</summary>
+    public void SetFilters(LayerNode node, IReadOnlyList<LayerFilter> filters, string name)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentNullException.ThrowIfNull(filters);
+        History.Execute(new NodeFiltersCommand(name, node, node.Filters, filters, NotifyChanged));
+    }
+
+    /// <summary>Show other filters on an entry without recording anything (filter dialog preview).</summary>
+    public void PreviewFilters(LayerNode node, IReadOnlyList<LayerFilter> filters)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentNullException.ThrowIfNull(filters);
+        node.Filters = filters;
+        InvalidateComposite();
+        Changed?.Invoke();
+    }
+
+    private bool IsInDocument(LayerNode node) =>
+        node.Parent is not null && Document.Root.Contains(node);
+
+    // --- Layer masks ---
+
+    /// <summary>The mask brush stroke in progress on the active layer, if any.</summary>
+    public MaskStroke? ActiveMaskStroke { get; private set; }
+
+    /// <summary>
+    /// Layer → Add Layer Mask on the active layer: shows the selection when there is one, else
+    /// everything. False when there is no layer, it already has a mask, or a transform runs.
+    /// </summary>
+    public bool AddLayerMask()
+    {
+        var layer = Document.ActiveLayer;
+        if (layer is null || layer.HasMask || IsTransforming) return false;
+        var mask = Selection.HasSelection
+            ? LayerMask.FromSelection(Selection, layer)
+            : LayerMask.Filled(layer.Pixels.Width, layer.Pixels.Height, LayerMask.Reveal);
+        History.Execute(new LayerMaskCommand("Add Layer Mask", layer, null, mask, NotifyChanged));
+        return true;
+    }
+
+    /// <summary>Layer → Delete Layer Mask: the layer shows whole again.</summary>
+    public bool DeleteLayerMask()
+    {
+        var layer = Document.ActiveLayer;
+        if (layer?.Mask is not { } mask || IsTransforming) return false;
+        History.Execute(new LayerMaskCommand("Delete Layer Mask", layer, (byte[])mask.Clone(), null, NotifyChanged));
+        return true;
+    }
+
+    /// <summary>Layer → Apply Layer Mask: bake it into the layer's transparency, then remove it.</summary>
+    public bool ApplyLayerMask()
+    {
+        var layer = Document.ActiveLayer;
+        if (layer?.Mask is not { } mask || IsTransforming) return false;
+        var before = layer.Pixels.Clone();
+        var after = layer.Pixels.Clone();
+        LayerMask.ApplyTo(after, mask);
+        History.Execute(new CompoundCommand(
+            "Apply Layer Mask",
+            new LayerMaskCommand("Apply Layer Mask", layer, (byte[])mask.Clone(), null),
+            new LayerPixelsCommand("Apply Layer Mask", layer, before, after, NotifyChanged)));
+        return true;
+    }
+
+    /// <summary>Start a mask brush stroke on the active layer (a mask is added when it has none).</summary>
+    public bool BeginMaskStroke(MaskBrushOptions options)
+    {
+        var layer = Document.ActiveLayer;
+        if (layer is null || IsTransforming || ActiveMaskStroke is not null) return false;
+        if (IsEditingSelection)
+            CommitSelectionEdit();
+        ActiveMaskStroke = new MaskStroke(layer, options);
+        return true;
+    }
+
+    /// <summary>Paint the stroke on to document point x, y.</summary>
+    public void ContinueMaskStroke(double docX, double docY)
+    {
+        if (ActiveMaskStroke is null) return;
+        if (ActiveMaskStroke.LineTo(docX, docY))
+            NotifyChanged();
+    }
+
+    /// <summary>End the stroke: one undo step (none when it painted nothing).</summary>
+    public void EndMaskStroke()
+    {
+        var stroke = ActiveMaskStroke;
+        if (stroke is null) return;
+        ActiveMaskStroke = null;
+        if (stroke.Finish(NotifyChanged) is { } command)
+            History.Record(command);
+        else
+            NotifyChanged();
     }
 
     public Layer? Paste(ImageClipboard clipboard, int? atX = null, int? atY = null)
@@ -385,7 +592,7 @@ public sealed class DocumentWorkspace : IDisposable
     {
         if (ActiveTransform is null) return;
         var (pixels, ox, oy) = ActiveTransform.Bake();
-        ActiveTransform.Layer.ReplacePixels(pixels);
+        ActiveTransform.Layer.ReplacePixels(pixels, ActiveTransform.BakeMask());
         ActiveTransform.Layer.OffsetX = ox;
         ActiveTransform.Layer.OffsetY = oy;
         if (IsSelectionTransform)
@@ -414,7 +621,7 @@ public sealed class DocumentWorkspace : IDisposable
             return;
         }
 
-        session.Layer.ReplacePixels(session.OriginalPixels.Clone());
+        session.Layer.ReplacePixels(session.OriginalPixels.Clone(), (byte[]?)session.OriginalMask?.Clone());
         session.Layer.OffsetX = session.OriginalOffsetX;
         session.Layer.OffsetY = session.OriginalOffsetY;
         ActiveTransform = null;
@@ -468,9 +675,11 @@ public sealed class DocumentWorkspace : IDisposable
 
         var layer = session.Layer;
         var layerBefore = session.OriginalPixels.Clone();
+        var maskBefore = (byte[]?)session.OriginalMask?.Clone();
         int beforeOx = session.OriginalOffsetX;
         int beforeOy = session.OriginalOffsetY;
         var layerAfter = layer.Pixels.Clone();
+        var maskAfter = (byte[]?)layer.Mask?.Clone();
         int afterOx = layer.OffsetX;
         int afterOy = layer.OffsetY;
 
@@ -478,7 +687,7 @@ public sealed class DocumentWorkspace : IDisposable
         session.Dispose();
 
         History.Record(new TransformLayerCommand(
-            layer, layerBefore, beforeOx, beforeOy, layerAfter, afterOx, afterOy, NotifyChanged));
+            layer, layerBefore, maskBefore, beforeOx, beforeOy, layerAfter, maskAfter, afterOx, afterOy, NotifyChanged));
         Document.IsDirty = true;
         Changed?.Invoke();
     }

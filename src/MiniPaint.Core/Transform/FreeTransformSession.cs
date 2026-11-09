@@ -20,9 +20,13 @@ public enum TransformHandle
 public sealed class FreeTransformSession : IDisposable
 {
     private bool _disposed;
+    private PixelBuffer? _maskSource;
 
     public Layer Layer { get; }
     public PixelBuffer OriginalPixels { get; }
+
+    /// <summary>The layer mask at the start (null when the layer has none); it follows the transform.</summary>
+    public byte[]? OriginalMask { get; }
     public int OriginalOffsetX { get; }
     public int OriginalOffsetY { get; }
 
@@ -43,6 +47,7 @@ public sealed class FreeTransformSession : IDisposable
     {
         Layer = layer ?? throw new ArgumentNullException(nameof(layer));
         OriginalPixels = layer.Pixels.Clone();
+        OriginalMask = (byte[]?)layer.Mask?.Clone();
         OriginalOffsetX = layer.OffsetX;
         OriginalOffsetY = layer.OffsetY;
         PivotX = OriginalOffsetX + OriginalPixels.Width / 2.0;
@@ -167,6 +172,16 @@ public sealed class FreeTransformSession : IDisposable
     /// </summary>
     public (PixelBuffer pixels, int offsetX, int offsetY) Bake() => Bake(OriginalPixels);
 
+    /// <summary>The original layer mask with the current transform (same size as <see cref="Bake()"/>), or null.</summary>
+    public byte[]? BakeMask()
+    {
+        if (OriginalMask is null) return null;
+        _maskSource ??= LayerMask.ToBuffer(OriginalMask, BaseWidth, BaseHeight);
+        var (pixels, _, _) = Bake(_maskSource);
+        using (pixels)
+            return LayerMask.FromAlpha(pixels);
+    }
+
     /// <summary>
     /// Bake another buffer the same size as the original pixels with the same transform
     /// (e.g. the selection mask, so it follows the lifted pixels exactly).
@@ -225,6 +240,7 @@ public sealed class FreeTransformSession : IDisposable
     {
         if (_disposed) return;
         OriginalPixels.Dispose();
+        _maskSource?.Dispose();
         _disposed = true;
         GC.SuppressFinalize(this);
     }

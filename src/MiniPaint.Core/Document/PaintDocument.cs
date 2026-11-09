@@ -5,11 +5,12 @@ using MiniPaint.Core.Imaging;
 namespace MiniPaint.Core.Document;
 
 /// <summary>
-/// In-memory multi-layer document. Layers are ordered bottom → top.
+/// In-memory multi-layer document. The layer stack is a tree: <see cref="Root"/> holds layers and
+/// groups (which hold layers and groups…), each list ordered bottom → top.
 /// </summary>
 public sealed class PaintDocument : IDisposable
 {
-    private readonly List<Layer> _layers = new();
+    private List<Layer>? _layers;
     private bool _disposed;
 
     public Guid Id { get; } = Guid.NewGuid();
@@ -19,15 +20,26 @@ public sealed class PaintDocument : IDisposable
     public string? FilePath { get; set; }
     public string? ProjectPath { get; set; }
     public bool IsDirty { get; set; }
+
+    /// <summary>The active entry of the layer stack: a layer or a group.</summary>
     public Guid? ActiveLayerId { get; set; }
 
     /// <summary>Live color-mode constraint (RGBA / Indexed / ECS / AGA). Layers stay full RGBA.</summary>
     public DocumentColorSettings ColorSettings { get; } = new();
 
-    public IReadOnlyList<Layer> Layers => _layers;
+    /// <summary>The invisible top-level group: its children are the top-level entries.</summary>
+    public LayerGroup Root { get; } = new("Root");
 
-    public Layer? ActiveLayer =>
-        ActiveLayerId is Guid id ? _layers.Find(l => l.Id == id) : null;
+    /// <summary>Every pixel layer, groups flattened, bottom → top.</summary>
+    public IReadOnlyList<Layer> Layers => _layers ??= AllNodes.OfType<Layer>().ToList();
+
+    /// <summary>Every layer and group, depth-first, bottom → top (a group comes before its content).</summary>
+    public IEnumerable<LayerNode> AllNodes => Root.SelfAndDescendants().Skip(1);
+
+    public LayerNode? ActiveNode => ActiveLayerId is Guid id ? FindNode(id) : null;
+
+    /// <summary>The active entry when it is a pixel layer; null when a group is active.</summary>
+    public Layer? ActiveLayer => ActiveNode as Layer;
 
     public PaintDocument(string name, int width, int height)
     {
@@ -63,13 +75,23 @@ public sealed class PaintDocument : IDisposable
     }
 
     /// <summary>
-    /// New document sized to the layer's opaque pixel content (trimmed transparency).
-    /// Returns null if the layer is fully transparent.
+    /// New document sized to the layer's visible pixel content (layer mask applied, transparency
+    /// trimmed; its filters come along, still editable). Returns null if nothing of the layer shows.
     /// </summary>
     public static PaintDocument? CreateFromLayerContent(Layer sourceLayer, string? name = null)
     {
         ArgumentNullException.ThrowIfNull(sourceLayer);
-        var cropped = PixelOps.CropToOpaqueContent(sourceLayer.Pixels, out _, out _);
+        PixelBuffer? cropped;
+        if (sourceLayer.Mask is { } mask)
+        {
+            using var masked = sourceLayer.Pixels.Clone();
+            LayerMask.ApplyTo(masked, mask);
+            cropped = PixelOps.CropToOpaqueContent(masked, out _, out _);
+        }
+        else
+        {
+            cropped = PixelOps.CropToOpaqueContent(sourceLayer.Pixels, out _, out _);
+        }
         if (cropped is null) return null;
 
         string docName = string.IsNullOrWhiteSpace(name) ? sourceLayer.Name : name.Trim();
@@ -78,106 +100,138 @@ public sealed class PaintDocument : IDisposable
         {
             IsVisible = true,
             Opacity = 1f,
-            BlendMode = BlendMode.Normal
+            BlendMode = BlendMode.Normal,
+            Filters = sourceLayer.Filters
         });
         doc.IsDirty = true;
         return doc;
     }
 
+    /// <summary>Add a layer at the top level (at <paramref name="index"/>, else on top) and make it active.</summary>
     public Layer AddLayer(Layer layer, int? index = null)
     {
-        ThrowIfDisposed();
-        ArgumentNullException.ThrowIfNull(layer);
-        if (index is null || index >= _layers.Count)
-            _layers.Add(layer);
-        else
-            _layers.Insert(Math.Max(0, index.Value), layer);
-
-        ActiveLayerId = layer.Id;
-        IsDirty = true;
+        AddNode(layer, Root, index);
         return layer;
     }
 
-    public Layer AddEmptyLayer(string name)
-    {
-        var layer = new Layer(name, Width, Height);
-        return AddLayer(layer);
-    }
-
-    public bool RemoveLayer(Guid layerId)
+    /// <summary>Put an entry into <paramref name="parent"/> (the root when null) at <paramref name="index"/> (else on top) and make it active.</summary>
+    public void AddNode(LayerNode node, LayerGroup? parent = null, int? index = null)
     {
         ThrowIfDisposed();
-        var idx = _layers.FindIndex(l => l.Id == layerId);
-        if (idx < 0) return false;
-        if (_layers.Count <= 1)
+        ArgumentNullException.ThrowIfNull(node);
+        parent ??= Root;
+        if (!ReferenceEquals(parent, Root) && !Root.Contains(parent))
+            throw new ArgumentException("The group is not in this document.", nameof(parent));
+        parent.Insert(index ?? parent.Children.Count, node);
+        ActiveLayerId = node.Id;
+        StructureChanged();
+    }
+
+    public bool RemoveNode(Guid nodeId)
+    {
+        var node = DetachNode(nodeId);
+        node?.Dispose();
+        return node is not null;
+    }
+
+    /// <summary>
+    /// Take an entry out of the document without disposing it (an undo step can put the same
+    /// instance back). Null when it is not in the document. The document always keeps at least
+    /// one pixel layer.
+    /// </summary>
+    public LayerNode? DetachNode(Guid nodeId)
+    {
+        ThrowIfDisposed();
+        var node = FindNode(nodeId);
+        if (node?.Parent is not { } parent) return null;
+        int layersInside = node.SelfAndDescendants().OfType<Layer>().Count();
+        if (layersInside > 0 && layersInside >= Layers.Count)
             throw new InvalidOperationException("Cannot delete the last layer.");
 
-        var layer = _layers[idx];
-        _layers.RemoveAt(idx);
-        layer.Dispose();
-
-        if (ActiveLayerId == layerId)
-            ActiveLayerId = _layers[Math.Clamp(idx, 0, _layers.Count - 1)].Id;
-
-        IsDirty = true;
-        return true;
+        int index = parent.Remove(node);
+        StructureChanged();
+        if (ActiveLayerId is Guid active && node.SelfAndDescendants().Any(n => n.Id == active))
+        {
+            // Next active: the entry that took its place, else the one below, else its group.
+            var siblings = parent.Children;
+            ActiveLayerId = siblings.Count > 0
+                ? siblings[Math.Clamp(index, 0, siblings.Count - 1)].Id
+                : ReferenceEquals(parent, Root) ? Layers.LastOrDefault()?.Id : parent.Id;
+        }
+        return node;
     }
 
-    public Layer DuplicateLayer(Guid layerId)
+    /// <summary>Move an entry into <paramref name="parent"/> at <paramref name="index"/> (counted once it has left its place).</summary>
+    public void MoveNode(LayerNode node, LayerGroup parent, int index)
     {
         ThrowIfDisposed();
-        var idx = _layers.FindIndex(l => l.Id == layerId);
-        if (idx < 0) throw new ArgumentException("Layer not found.", nameof(layerId));
-        var copy = _layers[idx].Clone();
-        _layers.Insert(idx + 1, copy);
-        ActiveLayerId = copy.Id;
-        IsDirty = true;
-        return copy;
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentNullException.ThrowIfNull(parent);
+        if (node.Parent is not { } from)
+            throw new ArgumentException("The entry is not in a group.", nameof(node));
+        if (node is LayerGroup group && group.Contains(parent))
+            throw new InvalidOperationException("A group cannot go inside itself.");
+        from.Remove(node);
+        parent.Insert(index, node);
+        StructureChanged();
     }
 
-    public void MoveLayer(Guid layerId, int newIndex)
+    /// <summary>Where an entry sits: its group and its index there (bottom = 0).</summary>
+    public (LayerGroup Parent, int Index) PositionOf(LayerNode node)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        if (node.Parent is not { } parent || !Root.Contains(node))
+            throw new ArgumentException("The entry is not in this document.", nameof(node));
+        return (parent, IndexIn(parent, node));
+    }
+
+    /// <summary>
+    /// Where Move Up takes an entry: above the next one in its group, into the bottom of the group
+    /// just above when that group is open, or out of its group when it is already on top.
+    /// Null at the very top.
+    /// </summary>
+    public (LayerGroup Parent, int Index)? StepUp(LayerNode node)
+    {
+        var (parent, i) = PositionOf(node);
+        if (i < parent.Children.Count - 1)
+        {
+            var next = parent.Children[i + 1];
+            return next is LayerGroup { IsExpanded: true } group ? (group, 0) : (parent, i + 1);
+        }
+        if (parent.Parent is not { } outer) return null;
+        return (outer, IndexIn(outer, parent) + 1);
+    }
+
+    /// <summary>Where Move Down takes an entry (the mirror of <see cref="StepUp"/>). Null at the very bottom.</summary>
+    public (LayerGroup Parent, int Index)? StepDown(LayerNode node)
+    {
+        var (parent, i) = PositionOf(node);
+        if (i > 0)
+        {
+            var below = parent.Children[i - 1];
+            return below is LayerGroup { IsExpanded: true } group ? (group, group.Children.Count) : (parent, i - 1);
+        }
+        if (parent.Parent is not { } outer) return null;
+        return (outer, IndexIn(outer, parent));
+    }
+
+    public LayerNode? FindNode(Guid id)
     {
         ThrowIfDisposed();
-        var idx = _layers.FindIndex(l => l.Id == layerId);
-        if (idx < 0) throw new ArgumentException("Layer not found.", nameof(layerId));
-        newIndex = Math.Clamp(newIndex, 0, _layers.Count - 1);
-        if (idx == newIndex) return;
-
-        var layer = _layers[idx];
-        _layers.RemoveAt(idx);
-        _layers.Insert(newIndex, layer);
-        IsDirty = true;
+        foreach (var node in AllNodes)
+        {
+            if (node.Id == id)
+                return node;
+        }
+        return null;
     }
 
-    public void RenameLayer(Guid layerId, string name)
-    {
-        ThrowIfDisposed();
-        var layer = _layers.Find(l => l.Id == layerId)
-            ?? throw new ArgumentException("Layer not found.", nameof(layerId));
-        layer.Name = name;
-        IsDirty = true;
-    }
+    public LayerNode RequireNode(Guid id) =>
+        FindNode(id) ?? throw new ArgumentException("Layer not found.", nameof(id));
 
-    public void SetLayerVisibility(Guid layerId, bool visible)
-    {
-        var layer = RequireLayer(layerId);
-        layer.IsVisible = visible;
-        IsDirty = true;
-    }
-
-    public void SetLayerOpacity(Guid layerId, float opacity)
-    {
-        var layer = RequireLayer(layerId);
-        layer.Opacity = Math.Clamp(opacity, 0f, 1f);
-        IsDirty = true;
-    }
-
-    public void SetLayerBlendMode(Guid layerId, Composition.BlendMode blendMode)
-    {
-        var layer = RequireLayer(layerId);
-        layer.BlendMode = blendMode;
-        IsDirty = true;
-    }
+    /// <summary>A pixel layer by id (groups do not count).</summary>
+    public Layer RequireLayer(Guid layerId) =>
+        FindNode(layerId) as Layer ?? throw new ArgumentException("Layer not found.", nameof(layerId));
 
     public void SetLayerOffset(Guid layerId, int x, int y)
     {
@@ -198,21 +252,29 @@ public sealed class PaintDocument : IDisposable
         IsDirty = true;
     }
 
-    public Layer RequireLayer(Guid layerId)
-    {
-        ThrowIfDisposed();
-        return _layers.Find(l => l.Id == layerId)
-            ?? throw new ArgumentException("Layer not found.", nameof(layerId));
-    }
-
     public void Dispose()
     {
         if (_disposed) return;
-        foreach (var layer in _layers)
-            layer.Dispose();
-        _layers.Clear();
+        Root.Dispose();
+        _layers = null;
         _disposed = true;
         GC.SuppressFinalize(this);
+    }
+
+    private static int IndexIn(LayerGroup parent, LayerNode node)
+    {
+        for (int i = 0; i < parent.Children.Count; i++)
+        {
+            if (ReferenceEquals(parent.Children[i], node))
+                return i;
+        }
+        return -1;
+    }
+
+    private void StructureChanged()
+    {
+        _layers = null;
+        IsDirty = true;
     }
 
     private void ThrowIfDisposed() => ObjectDisposedException.ThrowIf(_disposed, this);

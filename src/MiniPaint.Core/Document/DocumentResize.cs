@@ -53,7 +53,10 @@ public static class DocumentResize
             int nw = Math.Max(1, (int)Math.Round(layer.Pixels.Width * sx));
             int nh = Math.Max(1, (int)Math.Round(layer.Pixels.Height * sy));
             var scaled = PixelOps.ScaleBuffer(layer.Pixels, nw, nh);
-            layer.ReplacePixels(scaled);
+            var mask = layer.Mask is { } m
+                ? LayerMask.Resample(m, layer.Pixels.Width, layer.Pixels.Height, nw, nh)
+                : null;
+            layer.ReplacePixels(scaled, mask);
             layer.OffsetX = (int)Math.Round(layer.OffsetX * sx);
             layer.OffsetY = (int)Math.Round(layer.OffsetY * sy);
         }

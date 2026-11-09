@@ -1,6 +1,7 @@
 using MiniPaint.Core.ColorMode;
 using MiniPaint.Core.Composition;
 using MiniPaint.Core.Document;
+using MiniPaint.Core.Filters;
 using MiniPaint.Core.Imaging;
 using MiniPaint.Core.Selection;
 
@@ -137,105 +138,9 @@ public sealed class CompoundCommand : IEditCommand
     }
 }
 
-public sealed class DeleteLayerCommand : IEditCommand
-{
-    private readonly PaintDocument _document;
-    private Guid _layerId;
-    private PixelBuffer? _pixels;
-    private string _name = "";
-    private bool _visible = true;
-    private float _opacity = 1f;
-    private BlendMode _blendMode = BlendMode.Normal;
-    private int _ox, _oy, _index;
-    private readonly Action? _onChanged;
-
-    public string Name => "Delete Layer";
-
-    public DeleteLayerCommand(PaintDocument document, Guid layerId, Action? onChanged = null)
-    {
-        _document = document;
-        _layerId = layerId;
-        _onChanged = onChanged;
-    }
-
-    public void Execute()
-    {
-        var idx = -1;
-        Layer? layer = null;
-        for (int i = 0; i < _document.Layers.Count; i++)
-        {
-            if (_document.Layers[i].Id == _layerId)
-            {
-                idx = i;
-                layer = _document.Layers[i];
-                break;
-            }
-        }
-        if (layer is null || idx < 0) return;
-
-        _index = idx;
-        _name = layer.Name;
-        _visible = layer.IsVisible;
-        _opacity = layer.Opacity;
-        _blendMode = layer.BlendMode;
-        _ox = layer.OffsetX;
-        _oy = layer.OffsetY;
-        _pixels?.Dispose();
-        _pixels = layer.Pixels.Clone();
-        _document.RemoveLayer(_layerId);
-        _onChanged?.Invoke();
-    }
-
-    public void Undo()
-    {
-        if (_pixels is null) return;
-        var layer = new Layer(_name, _pixels.Clone(), _ox, _oy)
-        {
-            IsVisible = _visible,
-            Opacity = _opacity,
-            BlendMode = _blendMode
-        };
-        _document.AddLayer(layer, _index);
-        _layerId = layer.Id;
-        _onChanged?.Invoke();
-    }
-}
-
-public sealed class ReorderLayerCommand : IEditCommand
-{
-    private readonly PaintDocument _document;
-    private readonly Guid _layerId;
-    private readonly int _from;
-    private readonly int _to;
-    private readonly Action? _onChanged;
-
-    public string Name => "Reorder Layer";
-
-    public ReorderLayerCommand(PaintDocument document, Guid layerId, int from, int to, Action? onChanged = null)
-    {
-        _document = document;
-        _layerId = layerId;
-        _from = from;
-        _to = to;
-        _onChanged = onChanged;
-    }
-
-    public void Execute()
-    {
-        _document.MoveLayer(_layerId, _to);
-        _onChanged?.Invoke();
-    }
-
-    public void Undo()
-    {
-        _document.MoveLayer(_layerId, _from);
-        _onChanged?.Invoke();
-    }
-}
-
 public sealed class LayerPropertyCommand : IEditCommand
 {
-    private readonly Layer _layer;
+    private readonly LayerNode _layer;
     private readonly string _nameBefore;
     private readonly string _nameAfter;
     private readonly bool _visBefore;
@@ -251,7 +156,7 @@ public sealed class LayerPropertyCommand : IEditCommand
 
     public LayerPropertyCommand(
         string commandName,
-        Layer layer,
+        LayerNode layer,
         string nameBefore, string nameAfter,
         bool visBefore, bool visAfter,
         float opBefore, float opAfter,
@@ -276,28 +181,28 @@ public sealed class LayerPropertyCommand : IEditCommand
         _onChanged = onChanged;
     }
 
-    public static LayerPropertyCommand Rename(Layer layer, string newName, Action? onChanged = null) =>
+    public static LayerPropertyCommand Rename(LayerNode layer, string newName, Action? onChanged = null) =>
         new("Rename Layer", layer, layer.Name, newName, layer.IsVisible, layer.IsVisible,
             layer.Opacity, layer.Opacity, layer.BlendMode, layer.BlendMode,
-            layer.OffsetX, layer.OffsetY, layer.OffsetX, layer.OffsetY, onChanged);
+            OffsetX(layer), OffsetY(layer), OffsetX(layer), OffsetY(layer), onChanged);
 
-    public static LayerPropertyCommand Visibility(Layer layer, bool visible, Action? onChanged = null) =>
+    public static LayerPropertyCommand Visibility(LayerNode layer, bool visible, Action? onChanged = null) =>
         new("Layer Visibility", layer, layer.Name, layer.Name, layer.IsVisible, visible,
             layer.Opacity, layer.Opacity, layer.BlendMode, layer.BlendMode,
-            layer.OffsetX, layer.OffsetY, layer.OffsetX, layer.OffsetY, onChanged);
+            OffsetX(layer), OffsetY(layer), OffsetX(layer), OffsetY(layer), onChanged);
 
-    public static LayerPropertyCommand Opacity(Layer layer, float opacity, Action? onChanged = null) =>
+    public static LayerPropertyCommand Opacity(LayerNode layer, float opacity, Action? onChanged = null) =>
         Opacity(layer, layer.Opacity, opacity, onChanged);
 
-    public static LayerPropertyCommand Opacity(Layer layer, float from, float to, Action? onChanged = null) =>
+    public static LayerPropertyCommand Opacity(LayerNode layer, float from, float to, Action? onChanged = null) =>
         new("Layer Opacity", layer, layer.Name, layer.Name, layer.IsVisible, layer.IsVisible,
             from, to, layer.BlendMode, layer.BlendMode,
-            layer.OffsetX, layer.OffsetY, layer.OffsetX, layer.OffsetY, onChanged);
+            OffsetX(layer), OffsetY(layer), OffsetX(layer), OffsetY(layer), onChanged);
 
-    public static LayerPropertyCommand BlendModeChange(Layer layer, BlendMode blendMode, Action? onChanged = null) =>
+    public static LayerPropertyCommand BlendModeChange(LayerNode layer, BlendMode blendMode, Action? onChanged = null) =>
         new("Layer Blend Mode", layer, layer.Name, layer.Name, layer.IsVisible, layer.IsVisible,
             layer.Opacity, layer.Opacity, layer.BlendMode, blendMode,
-            layer.OffsetX, layer.OffsetY, layer.OffsetX, layer.OffsetY, onChanged);
+            OffsetX(layer), OffsetY(layer), OffsetX(layer), OffsetY(layer), onChanged);
 
     public static LayerPropertyCommand Move(Layer layer, int x, int y, Action? onChanged = null) =>
         new("Move Layer", layer, layer.Name, layer.Name, layer.IsVisible, layer.IsVisible,
@@ -313,10 +218,16 @@ public sealed class LayerPropertyCommand : IEditCommand
         _layer.IsVisible = vis;
         _layer.Opacity = op;
         _layer.BlendMode = blend;
-        _layer.OffsetX = ox;
-        _layer.OffsetY = oy;
+        if (_layer is Layer pixels)
+        {
+            pixels.OffsetX = ox;
+            pixels.OffsetY = oy;
+        }
         _onChanged?.Invoke();
     }
+
+    private static int OffsetX(LayerNode node) => node is Layer layer ? layer.OffsetX : 0;
+    private static int OffsetY(LayerNode node) => node is Layer layer ? layer.OffsetY : 0;
 }
 
 /// <summary>
@@ -386,7 +297,7 @@ public sealed class PasteLayerCommand : IEditCommand
     {
         if (_currentLayerId is Guid id)
         {
-            try { _document.RemoveLayer(id); } catch { /* already gone */ }
+            try { _document.RemoveNode(id); } catch { /* already gone */ }
             _currentLayerId = null;
             LastLayer = null;
             _onChanged?.Invoke();
@@ -399,20 +310,25 @@ public sealed class TransformLayerCommand : IEditCommand
     private readonly Layer _layer;
     private readonly PixelBuffer _before;
     private readonly PixelBuffer _after;
+    private readonly byte[]? _maskBefore;
+    private readonly byte[]? _maskAfter;
     private readonly int _beforeOx, _beforeOy, _afterOx, _afterOy;
     private readonly Action? _onChanged;
 
     public string Name => "Free Transform";
 
+    /// <summary>The masks (null without one) are transformed with the pixels.</summary>
     public TransformLayerCommand(
         Layer layer,
-        PixelBuffer before, int beforeOx, int beforeOy,
-        PixelBuffer after, int afterOx, int afterOy,
+        PixelBuffer before, byte[]? maskBefore, int beforeOx, int beforeOy,
+        PixelBuffer after, byte[]? maskAfter, int afterOx, int afterOy,
         Action? onChanged = null)
     {
         _layer = layer;
         _before = before;
         _after = after;
+        _maskBefore = maskBefore;
+        _maskAfter = maskAfter;
         _beforeOx = beforeOx;
         _beforeOy = beforeOy;
         _afterOx = afterOx;
@@ -422,7 +338,7 @@ public sealed class TransformLayerCommand : IEditCommand
 
     public void Execute()
     {
-        _layer.ReplacePixels(_after.Clone());
+        _layer.ReplacePixels(_after.Clone(), (byte[]?)_maskAfter?.Clone());
         _layer.OffsetX = _afterOx;
         _layer.OffsetY = _afterOy;
         _onChanged?.Invoke();
@@ -430,57 +346,190 @@ public sealed class TransformLayerCommand : IEditCommand
 
     public void Undo()
     {
-        _layer.ReplacePixels(_before.Clone());
+        _layer.ReplacePixels(_before.Clone(), (byte[]?)_maskBefore?.Clone());
         _layer.OffsetX = _beforeOx;
         _layer.OffsetY = _beforeOy;
         _onChanged?.Invoke();
     }
 }
 
-public sealed class AddEmptyLayerCommand : IEditCommand
+/// <summary>Add, paint, apply or delete a layer mask (null = no mask).</summary>
+public sealed class LayerMaskCommand : IEditCommand
 {
-    private readonly PaintDocument _document;
-    private readonly string _name;
-    private Guid? _layerId;
+    private readonly Layer _layer;
+    private readonly byte[]? _before;
+    private readonly byte[]? _after;
     private readonly Action? _onChanged;
 
-    public string Name => "Add Layer";
-    public Layer? LastLayer { get; private set; }
+    public string Name { get; }
 
-    public AddEmptyLayerCommand(PaintDocument document, string name, Action? onChanged = null)
+    public LayerMaskCommand(string name, Layer layer, byte[]? before, byte[]? after, Action? onChanged = null)
     {
-        _document = document;
-        _name = name;
+        Name = name;
+        _layer = layer;
+        _before = before;
+        _after = after;
         _onChanged = onChanged;
     }
 
     public void Execute()
     {
-        if (_layerId is Guid id)
-        {
-            try
-            {
-                LastLayer = _document.RequireLayer(id);
-                return;
-            }
-            catch (ArgumentException) { _layerId = null; }
-        }
-
-        var layer = _document.AddEmptyLayer(_name);
-        _layerId = layer.Id;
-        LastLayer = layer;
+        _layer.SetMask((byte[]?)_after?.Clone());
         _onChanged?.Invoke();
     }
 
     public void Undo()
     {
-        if (_layerId is Guid id)
-        {
-            try { _document.RemoveLayer(id); } catch { }
-            _layerId = null;
-            LastLayer = null;
-            _onChanged?.Invoke();
-        }
+        _layer.SetMask((byte[]?)_before?.Clone());
+        _onChanged?.Invoke();
+    }
+}
+
+/// <summary>
+/// Put an entry (layer or group) into a group at an index and make it active. Undo takes it out
+/// without disposing it, so later steps that hold the same entry (a mask stroke on it…) still
+/// work after a redo.
+/// </summary>
+public sealed class InsertNodeCommand : IEditCommand
+{
+    private readonly PaintDocument _document;
+    private readonly LayerNode _node;
+    private readonly LayerGroup _parent;
+    private readonly int _index;
+    private readonly Guid? _activeBefore;
+    private readonly Action? _onChanged;
+
+    public string Name { get; }
+
+    public InsertNodeCommand(string name, PaintDocument document, LayerNode node, LayerGroup parent, int index, Action? onChanged = null)
+    {
+        Name = name;
+        _document = document;
+        _node = node;
+        _parent = parent;
+        _index = index;
+        _activeBefore = document.ActiveLayerId;
+        _onChanged = onChanged;
+    }
+
+    public void Execute()
+    {
+        if (_node.Parent is null)
+            _document.AddNode(_node, _parent, _index);
+        _document.ActiveLayerId = _node.Id;
+        _onChanged?.Invoke();
+    }
+
+    public void Undo()
+    {
+        _document.DetachNode(_node.Id);
+        if (_activeBefore is Guid id && _document.FindNode(id) is not null)
+            _document.ActiveLayerId = id;
+        _onChanged?.Invoke();
+    }
+}
+
+/// <summary>Delete a layer or a group (with its content); undo puts the same entry back.</summary>
+public sealed class DeleteNodeCommand : IEditCommand
+{
+    private readonly PaintDocument _document;
+    private readonly LayerNode _node;
+    private LayerGroup? _parent;
+    private int _index;
+    private readonly Action? _onChanged;
+
+    public string Name { get; }
+
+    public DeleteNodeCommand(PaintDocument document, LayerNode node, Action? onChanged = null)
+    {
+        _document = document;
+        _node = node;
+        _onChanged = onChanged;
+        Name = node is LayerGroup ? "Delete Group" : "Delete Layer";
+    }
+
+    public void Execute()
+    {
+        (_parent, _index) = _document.PositionOf(_node);
+        _document.DetachNode(_node.Id);
+        _onChanged?.Invoke();
+    }
+
+    public void Undo()
+    {
+        if (_parent is null) return;
+        _document.AddNode(_node, _parent, _index);
+        _onChanged?.Invoke();
+    }
+}
+
+/// <summary>Move a layer or a group to another place in the stack (in or out of groups).</summary>
+public sealed class MoveNodeCommand : IEditCommand
+{
+    private readonly PaintDocument _document;
+    private readonly LayerNode _node;
+    private readonly LayerGroup _fromParent;
+    private readonly int _fromIndex;
+    private readonly LayerGroup _toParent;
+    private readonly int _toIndex;
+    private readonly Action? _onChanged;
+
+    public string Name { get; }
+
+    /// <summary><paramref name="toIndex"/> is counted once the entry has left its current place.</summary>
+    public MoveNodeCommand(string name, PaintDocument document, LayerNode node, LayerGroup toParent, int toIndex, Action? onChanged = null)
+    {
+        Name = name;
+        _document = document;
+        _node = node;
+        (_fromParent, _fromIndex) = document.PositionOf(node);
+        _toParent = toParent;
+        _toIndex = toIndex;
+        _onChanged = onChanged;
+    }
+
+    public void Execute()
+    {
+        _document.MoveNode(_node, _toParent, _toIndex);
+        _onChanged?.Invoke();
+    }
+
+    public void Undo()
+    {
+        _document.MoveNode(_node, _fromParent, _fromIndex);
+        _onChanged?.Invoke();
+    }
+}
+
+/// <summary>Add, edit, switch, reorder or remove filters of a layer or group (the whole list before and after).</summary>
+public sealed class NodeFiltersCommand : IEditCommand
+{
+    private readonly LayerNode _node;
+    private readonly IReadOnlyList<LayerFilter> _before;
+    private readonly IReadOnlyList<LayerFilter> _after;
+    private readonly Action? _onChanged;
+
+    public string Name { get; }
+
+    public NodeFiltersCommand(string name, LayerNode node, IReadOnlyList<LayerFilter> before, IReadOnlyList<LayerFilter> after, Action? onChanged = null)
+    {
+        Name = name;
+        _node = node;
+        _before = before;
+        _after = after;
+        _onChanged = onChanged;
+    }
+
+    public void Execute()
+    {
+        _node.Filters = _after;
+        _onChanged?.Invoke();
+    }
+
+    public void Undo()
+    {
+        _node.Filters = _before;
+        _onChanged?.Invoke();
     }
 }
 
@@ -579,6 +628,7 @@ internal sealed class DocumentSnapshot : IDisposable
             layers[i] = new LayerSnap(
                 layer.Id,
                 layer.Pixels.Clone(),
+                (byte[]?)layer.Mask?.Clone(),
                 layer.OffsetX,
                 layer.OffsetY);
         }
@@ -595,7 +645,7 @@ internal sealed class DocumentSnapshot : IDisposable
             try { layer = document.RequireLayer(snap.Id); }
             catch (ArgumentException) { continue; }
 
-            layer.ReplacePixels(snap.Pixels.Clone());
+            layer.ReplacePixels(snap.Pixels.Clone(), (byte[]?)snap.Mask?.Clone());
             layer.OffsetX = snap.OffsetX;
             layer.OffsetY = snap.OffsetY;
         }
@@ -610,10 +660,11 @@ internal sealed class DocumentSnapshot : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private sealed class LayerSnap(Guid id, PixelBuffer pixels, int offsetX, int offsetY)
+    private sealed class LayerSnap(Guid id, PixelBuffer pixels, byte[]? mask, int offsetX, int offsetY)
     {
         public Guid Id { get; } = id;
         public PixelBuffer Pixels { get; } = pixels;
+        public byte[]? Mask { get; } = mask;
         public int OffsetX { get; } = offsetX;
         public int OffsetY { get; } = offsetY;
     }

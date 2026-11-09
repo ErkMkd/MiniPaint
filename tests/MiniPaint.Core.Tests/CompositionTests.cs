@@ -123,6 +123,6 @@ public class CompositionTests
     public void CannotDeleteLastLayer()
     {
         var doc = PaintDocument.CreateBlank("t", 2, 2);
-        Assert.Throws<InvalidOperationException>(() => doc.RemoveLayer(doc.Layers[0].Id));
+        Assert.Throws<InvalidOperationException>(() => doc.RemoveNode(doc.Layers[0].Id));
     }
 }

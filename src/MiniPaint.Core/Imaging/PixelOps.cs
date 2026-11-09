@@ -19,7 +19,8 @@ public static class PixelOps
     }
 
     /// <summary>
-    /// Blend src onto dst with opacity and blend mode for the source layer.
+    /// Blend src onto dst with opacity and blend mode for the source layer. An optional
+    /// <paramref name="mask"/> (one value per src pixel, 255 shows) scales the source alpha.
     /// </summary>
     public static void BlendLayer(
         PixelBuffer dst,
@@ -27,10 +28,13 @@ public static class PixelOps
         int offsetX,
         int offsetY,
         float opacity,
-        BlendMode blendMode = BlendMode.Normal)
+        BlendMode blendMode = BlendMode.Normal,
+        byte[]? mask = null)
     {
         ArgumentNullException.ThrowIfNull(dst);
         ArgumentNullException.ThrowIfNull(src);
+        if (mask is not null && mask.Length != src.Width * src.Height)
+            throw new ArgumentException("The mask does not match the source size.", nameof(mask));
         opacity = Math.Clamp(opacity, 0f, 1f);
         if (opacity <= 0f) return;
 
@@ -44,16 +48,16 @@ public static class PixelOps
         if ((long)(x1 - x0) * (y1 - y0) < 128 * 1024)
         {
             for (int y = y0; y < y1; y++)
-                BlendRow(dst, src, y, x0, x1, offsetX, offsetY, opacity, blendMode);
+                BlendRow(dst, src, mask, y, x0, x1, offsetX, offsetY, opacity, blendMode);
         }
         else
         {
-            Parallel.For(y0, y1, y => BlendRow(dst, src, y, x0, x1, offsetX, offsetY, opacity, blendMode));
+            Parallel.For(y0, y1, y => BlendRow(dst, src, mask, y, x0, x1, offsetX, offsetY, opacity, blendMode));
         }
     }
 
     private static void BlendRow(
-        PixelBuffer dst, PixelBuffer src, int y, int x0, int x1,
+        PixelBuffer dst, PixelBuffer src, byte[]? mask, int y, int x0, int x1,
         int offsetX, int offsetY, float opacity, BlendMode blendMode)
     {
         var dstPx = dst.Pixels;
@@ -66,6 +70,8 @@ public static class PixelOps
             int di = (y * dst.Width + x) * 4;
 
             byte sa = srcPx[si + 3];
+            if (mask is not null)
+                sa = (byte)((sa * mask[sy * src.Width + sx] + 127) / 255);
             if (sa == 0) continue;
 
             byte sr = srcPx[si];

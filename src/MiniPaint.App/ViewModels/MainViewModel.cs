@@ -8,11 +8,13 @@ using MiniPaint.App.Logging;
 using MiniPaint.Core.ColorMode;
 using MiniPaint.Core.Composition;
 using MiniPaint.Core.Document;
+using MiniPaint.Core.Filters;
 using MiniPaint.Core.History;
 using MiniPaint.Core.Imaging;
 using MiniPaint.Core.Project;
 using MiniPaint.App.Services;
 using MiniPaint.Core.Selection;
+using MiniPaint.Inpainting;
 using MiniPaint.Segmentation;
 
 namespace MiniPaint.App.ViewModels;
@@ -32,8 +34,23 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     private readonly ObjectSelectionService _objectSelection = new();
     private bool _objectSelectionBusy;
 
+    private readonly ContentAwareFillService _contentAwareFill = new();
+    /// <summary>Shown in the status bar instead of Modified / Saved while a long task runs.</summary>
+    private string? _busyStatus;
+
     public ObservableCollection<DocumentTabViewModel> Tabs { get; } = new();
     public ObservableCollection<LayerItemViewModel> Layers { get; } = new();
+
+    /// <summary>Filters of the active layer or group, in the order they apply.</summary>
+    public ObservableCollection<FilterItemViewModel> NodeFilters { get; } = new();
+
+    /// <summary>Header of the filters list (names the active layer or group).</summary>
+    [ObservableProperty] public partial string FiltersHeader { get; set; } = "Filters";
+
+    [ObservableProperty] public partial bool HasNodeFilters { get; set; }
+
+    private LayerNode? _filtersNode;
+    private IReadOnlyList<LayerFilter>? _filtersShown;
 
     [ObservableProperty] public partial DocumentTabViewModel? SelectedTab { get; set; }
     [ObservableProperty] public partial LayerItemViewModel? SelectedLayer { get; set; }
@@ -98,8 +115,13 @@ public partial class MainViewModel : ViewModelBase, IDisposable
 
     public bool IsMagicWandTool => CurrentTool == CanvasTool.MagicWand;
 
+    public bool IsPolygonLassoTool => CurrentTool == CanvasTool.PolygonLasso;
+
+    /// <summary>Polygonal Lasso: anti-aliased edges (photos); off gives hard pixel edges.</summary>
+    [ObservableProperty] public partial bool LassoAntiAlias { get; set; } = true;
+
     public bool ShowSelectionOptions =>
-        (CurrentTool is CanvasTool.RectSelect or CanvasTool.MagicWand or CanvasTool.ObjectSelect) &&
+        (CurrentTool is CanvasTool.RectSelect or CanvasTool.PolygonLasso or CanvasTool.MagicWand or CanvasTool.ObjectSelect) &&
         !IsTransforming && !IsEditingSelection;
 
     // --- Object Selection (MobileSAM, local) ---
@@ -114,6 +136,56 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     public string ObjectSelectionTip => _objectSelection.IsAvailable
         ? "Object Selection (Q) — click an object or drag a box around it · Shift add · Alt subtract · Shift+Alt intersect"
         : "Object Selection — AI model not installed: run scripts\\Get-Models.ps1, then rebuild";
+
+    // --- Content-Aware Fill (LaMa, local) ---
+
+    public bool IsContentAwareFillAvailable => _contentAwareFill.IsAvailable;
+
+    public string ContentAwareFillTip => _contentAwareFill.IsAvailable
+        ? "Rebuild the selected area from its surroundings on a new layer above the active one (AI runs locally)"
+        : "Content-Aware Fill — AI model not installed: run scripts\\Get-Models.ps1, then rebuild";
+
+    // --- Mask Brush (layer masks) ---
+
+    /// <summary>Brush diameter in document pixels.</summary>
+    [ObservableProperty] public partial decimal MaskBrushSizeValue { get; set; } = 60;
+
+    /// <summary>0 = soft edge across the whole radius, 100 = hard edge.</summary>
+    [ObservableProperty] public partial double MaskBrushHardness { get; set; }
+
+    /// <summary>Most a stroke changes the mask, in percent.</summary>
+    [ObservableProperty] public partial double MaskBrushOpacity { get; set; } = 100;
+
+    /// <summary>False paints black (hides the layer), true paints white (reveals it).</summary>
+    [ObservableProperty] public partial bool MaskBrushReveal { get; set; }
+
+    public bool IsMaskBrushHide
+    {
+        get => !MaskBrushReveal;
+        set { if (value) MaskBrushReveal = false; }
+    }
+
+    public bool IsMaskBrushReveal
+    {
+        get => MaskBrushReveal;
+        set { if (value) MaskBrushReveal = true; }
+    }
+
+    public MaskBrushOptions MaskBrushOptions =>
+        new((double)MaskBrushSizeValue, MaskBrushHardness / 100, MaskBrushOpacity / 100, MaskBrushReveal);
+
+    public bool IsMaskBrushTool => CurrentTool == CanvasTool.MaskBrush;
+
+    partial void OnMaskBrushSizeValueChanged(decimal value) => OnPropertyChanged(nameof(MaskBrushOptions));
+    partial void OnMaskBrushHardnessChanged(double value) => OnPropertyChanged(nameof(MaskBrushOptions));
+    partial void OnMaskBrushOpacityChanged(double value) => OnPropertyChanged(nameof(MaskBrushOptions));
+
+    partial void OnMaskBrushRevealChanged(bool value)
+    {
+        OnPropertyChanged(nameof(MaskBrushOptions));
+        OnPropertyChanged(nameof(IsMaskBrushHide));
+        OnPropertyChanged(nameof(IsMaskBrushReveal));
+    }
 
     partial void OnSelectionModeChanged(SelectionCombineMode value)
     {
@@ -131,7 +203,9 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     partial void OnCurrentToolChanged(CanvasTool value)
     {
         OnPropertyChanged(nameof(IsMagicWandTool));
+        OnPropertyChanged(nameof(IsPolygonLassoTool));
         OnPropertyChanged(nameof(IsObjectSelectTool));
+        OnPropertyChanged(nameof(IsMaskBrushTool));
         OnPropertyChanged(nameof(ShowSelectionOptions));
     }
 
@@ -202,6 +276,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         ActiveWorkspace.Document.ActiveLayerId = value.Id;
         foreach (var l in Layers)
             l.IsActive = l.Id == value.Id;
+        RefreshNodeFilters();
         SelectedBlendOption = BlendModeNames.GetOption(value.BlendMode);
         TransformOpacity = value.Opacity;
         // No InvalidateComposite: the active layer does not change the merged image, and
@@ -239,6 +314,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     private void RefreshLayers()
     {
         var ws = ActiveWorkspace;
+        RefreshNodeFilters();
         if (ws is not null && SameLayerRows(ws.Document))
         {
             // Runs on every workspace change (selection, zoom…): only refresh the existing rows.
@@ -260,12 +336,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         Layers.Clear();
         if (ws is null) return;
 
-        // Show top → bottom in panel
-        for (int i = ws.Document.Layers.Count - 1; i >= 0; i--)
-        {
-            var layer = ws.Document.Layers[i];
-            Layers.Add(new LayerItemViewModel(layer, layer.Id == ws.Document.ActiveLayerId));
-        }
+        foreach (var (node, depth) in PanelRows(ws.Document.Root, 0))
+            Layers.Add(new LayerItemViewModel(node, depth, node.Id == ws.Document.ActiveLayerId));
 
         SelectedLayer = Layers.FirstOrDefault(l => l.IsActive) ?? Layers.FirstOrDefault();
         SelectedBlendOption = SelectedLayer is null
@@ -274,17 +346,50 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         TransformOpacity = SelectedLayer?.Opacity ?? 1f;
     }
 
-    /// <summary>True when the panel rows are exactly the document's layers (top → bottom).</summary>
+    /// <summary>The panel rows: the tree top → bottom, the content of open groups under them, indented.</summary>
+    private static IEnumerable<(LayerNode Node, int Depth)> PanelRows(LayerGroup group, int depth)
+    {
+        for (int i = group.Children.Count - 1; i >= 0; i--)
+        {
+            var node = group.Children[i];
+            yield return (node, depth);
+            if (node is LayerGroup { IsExpanded: true } open)
+            {
+                foreach (var row in PanelRows(open, depth + 1))
+                    yield return row;
+            }
+        }
+    }
+
+    /// <summary>True when the panel rows are exactly the document's current rows.</summary>
     private bool SameLayerRows(PaintDocument document)
     {
-        int count = document.Layers.Count;
-        if (Layers.Count != count || count == 0) return false;
-        for (int i = 0; i < count; i++)
+        int i = 0;
+        foreach (var (node, depth) in PanelRows(document.Root, 0))
         {
-            if (!ReferenceEquals(Layers[i].Layer, document.Layers[count - 1 - i]))
+            if (i >= Layers.Count || !ReferenceEquals(Layers[i].Node, node) || Layers[i].Depth != depth)
                 return false;
+            i++;
         }
-        return true;
+        return i == Layers.Count && i > 0;
+    }
+
+    /// <summary>Rebuild the filters list when the active entry or its filters changed.</summary>
+    private void RefreshNodeFilters()
+    {
+        var node = ActiveWorkspace?.Document.ActiveNode;
+        var filters = node?.Filters;
+        if (ReferenceEquals(node, _filtersNode) && ReferenceEquals(filters, _filtersShown)) return;
+        _filtersNode = node;
+        _filtersShown = filters;
+        NodeFilters.Clear();
+        if (filters is not null)
+        {
+            for (int i = 0; i < filters.Count; i++)
+                NodeFilters.Add(new FilterItemViewModel(filters[i], i));
+        }
+        HasNodeFilters = NodeFilters.Count > 0;
+        FiltersHeader = node is null ? "Filters" : $"Filters — {node.Name}";
     }
 
     public void UpdateStatus(int? cursorX = null, int? cursorY = null)
@@ -331,7 +436,10 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         {
             TransformInfo = "";
             SelectionEditInfo = "";
-            StatusText = ws.Document.IsDirty ? "Modified" : "Saved";
+            StatusText = _busyStatus ??
+                (CurrentTool == CanvasTool.MaskBrush && ws.Document.ActiveNode is LayerGroup
+                    ? "Mask Brush paints a layer's mask — select a layer, not a group"
+                    : ws.Document.IsDirty ? "Modified" : "Saved");
         }
     }
 
@@ -414,8 +522,13 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         item ??= SelectedLayer;
         if (item is null) return;
 
+        if (item.Node is not Layer layer)
+        {
+            StatusText = "New Image from Layer Content works on a layer, not a group.";
+            return;
+        }
         string name = item.Name;
-        var ws = _manager.NewDocumentFromLayerContent(item.Layer, name);
+        var ws = _manager.NewDocumentFromLayerContent(layer, name);
         if (ws is null)
         {
             StatusText = "Layer has no visible content.";
@@ -1026,7 +1139,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     {
         var ws = ActiveWorkspace;
         if (ws is null) return;
-        ws.History.Execute(new AddEmptyLayerCommand(ws.Document, $"Layer {ws.Document.Layers.Count + 1}", ws.NotifyChanged));
+        ws.AddLayerAboveActive($"Layer {ws.Document.Layers.Count + 1}");
         RefreshLayers();
     }
 
@@ -1034,9 +1147,9 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     private void DeleteLayer()
     {
         var ws = ActiveWorkspace;
-        if (ws?.Document.ActiveLayerId is not Guid id) return;
-        if (ws.Document.Layers.Count <= 1) return;
-        ws.History.Execute(new DeleteLayerCommand(ws.Document, id, ws.NotifyChanged));
+        if (ws?.Document.ActiveNode is not { } node) return;
+        if (!ws.DeleteNode(node))
+            StatusText = "The image needs at least one layer.";
         RefreshLayers();
     }
 
@@ -1044,31 +1157,153 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     private void DuplicateLayer()
     {
         var ws = ActiveWorkspace;
-        if (ws?.Document.ActiveLayerId is not Guid id) return;
-        ws.Document.DuplicateLayer(id);
-        ws.NotifyChanged();
+        if (ws?.Document.ActiveNode is not { } node) return;
+        ws.DuplicateNode(node);
         RefreshLayers();
     }
 
     [RelayCommand]
-    private void MoveLayerUp()
+    private void MoveLayerUp() => MoveActiveNode(up: true);
+
+    [RelayCommand]
+    private void MoveLayerDown() => MoveActiveNode(up: false);
+
+    /// <summary>Through the stack, in and out of open groups (a closed group is passed as one entry).</summary>
+    private void MoveActiveNode(bool up)
     {
         var ws = ActiveWorkspace;
-        if (ws?.Document.ActiveLayer is not { } layer) return;
-        int idx = IndexOf(ws.Document, layer.Id);
-        if (idx < 0 || idx >= ws.Document.Layers.Count - 1) return;
-        ws.History.Execute(new ReorderLayerCommand(ws.Document, layer.Id, idx, idx + 1, ws.NotifyChanged));
+        if (ws?.Document.ActiveNode is not { } node) return;
+        if (ws.MoveNode(node, up))
+            RefreshLayers();
+    }
+
+    // --- Groups ---
+
+    [RelayCommand]
+    private void NewGroup()
+    {
+        var ws = ActiveWorkspace;
+        if (ws is null) return;
+        ws.AddGroupAboveActive(NextGroupName(ws.Document));
         RefreshLayers();
     }
 
+    /// <summary>Ctrl+G: put the active layer (or group) into a new group.</summary>
     [RelayCommand]
-    private void MoveLayerDown()
+    private void GroupLayer()
     {
         var ws = ActiveWorkspace;
-        if (ws?.Document.ActiveLayer is not { } layer) return;
-        int idx = IndexOf(ws.Document, layer.Id);
-        if (idx <= 0) return;
-        ws.History.Execute(new ReorderLayerCommand(ws.Document, layer.Id, idx, idx - 1, ws.NotifyChanged));
+        if (ws?.Document.ActiveNode is not { } node) return;
+        if (ws.GroupNode(node, NextGroupName(ws.Document)) is not null)
+            RefreshLayers();
+    }
+
+    /// <summary>Ctrl+Shift+G: the active group's content takes its place.</summary>
+    [RelayCommand]
+    private void Ungroup()
+    {
+        var ws = ActiveWorkspace;
+        if (ws?.Document.ActiveNode is not LayerGroup group)
+        {
+            StatusText = "Select a group to ungroup.";
+            return;
+        }
+        if (ws.Ungroup(group))
+            RefreshLayers();
+    }
+
+    /// <summary>Open or close a group in the layers panel.</summary>
+    public void ToggleGroupExpanded(LayerItemViewModel item)
+    {
+        if (item.Node is not LayerGroup group) return;
+        group.IsExpanded = !group.IsExpanded;
+        RefreshLayers();
+    }
+
+    private static string NextGroupName(PaintDocument document) =>
+        $"Group {document.AllNodes.OfType<LayerGroup>().Count() + 1}";
+
+    // --- Filters (non-destructive, on the active layer or group) ---
+
+    [RelayCommand]
+    private Task AddBrightnessContrastAsync() => AddFilterAsync(new BrightnessContrastFilter(0, 0));
+
+    [RelayCommand]
+    private Task AddHueSaturationAsync() => AddFilterAsync(new HueSaturationFilter(0, 0, 0));
+
+    [RelayCommand]
+    private Task AddColorBalanceAsync() =>
+        AddFilterAsync(new ColorBalanceFilter(default, default, default));
+
+    private Task AddFilterAsync(LayerFilter filter)
+    {
+        if (ActiveWorkspace?.Document.ActiveNode is not { } node)
+        {
+            StatusText = "Select a layer or a group first.";
+            return Task.CompletedTask;
+        }
+        return EditFilterAsync(node, -1, filter);
+    }
+
+    public Task EditFilterAsync(FilterItemViewModel item) =>
+        ActiveWorkspace?.Document.ActiveNode is { } node && item.Index < node.Filters.Count
+            ? EditFilterAsync(node, item.Index, node.Filters[item.Index])
+            : Task.CompletedTask;
+
+    /// <summary>
+    /// Open the filter dialog for a new filter (<paramref name="index"/> −1) or an existing one,
+    /// previewing on the canvas; OK records one undo step, Cancel leaves the filters as they were.
+    /// </summary>
+    private async Task EditFilterAsync(LayerNode node, int index, LayerFilter initial)
+    {
+        var ws = ActiveWorkspace;
+        if (ws is null || _window is null) return;
+        if (ws.IsTransforming) ws.CancelTransform();
+        if (ws.IsEditingSelection) ws.CommitSelectionEdit();
+
+        var original = node.Filters;
+        IReadOnlyList<LayerFilter> With(LayerFilter filter) =>
+            index < 0 ? [.. original, filter] : original.Select((f, i) => i == index ? filter : f).ToArray();
+
+        var vm = new FilterDialogViewModel(initial, node.Name);
+        vm.Changed += () => ws.PreviewFilters(node, vm.Preview ? With(vm.Result) : original);
+        ws.PreviewFilters(node, With(vm.Result));
+        bool? ok;
+        try
+        {
+            ok = await new Views.FilterWindow(vm).ShowDialog<bool?>(_window);
+        }
+        finally
+        {
+            ws.PreviewFilters(node, original);
+        }
+
+        var result = vm.Result;
+        if (ok == true && (index < 0 || result != original[index]))
+        {
+            ws.SetFilters(node, With(result), index < 0 ? $"Add {result.Name}" : $"Edit {result.Name}");
+            AppLog.Info($"Filter {(index < 0 ? "added" : "edited")} on '{node.Name}': {result.Name} ({result.Summary})");
+        }
+        RefreshLayers();
+    }
+
+    /// <summary>Switch a filter off or back on (its settings are kept).</summary>
+    public void ToggleFilter(FilterItemViewModel item)
+    {
+        var ws = ActiveWorkspace;
+        if (ws?.Document.ActiveNode is not { } node || item.Index >= node.Filters.Count) return;
+        var filter = node.Filters[item.Index];
+        var toggled = filter with { Enabled = !filter.Enabled };
+        ws.SetFilters(node, node.Filters.Select((f, i) => i == item.Index ? toggled : f).ToArray(),
+            toggled.Enabled ? $"Show {filter.Name}" : $"Hide {filter.Name}");
+        RefreshLayers();
+    }
+
+    public void RemoveFilter(FilterItemViewModel item)
+    {
+        var ws = ActiveWorkspace;
+        if (ws?.Document.ActiveNode is not { } node || item.Index >= node.Filters.Count) return;
+        ws.SetFilters(node, node.Filters.Where((_, i) => i != item.Index).ToArray(), $"Remove {item.Name}");
         RefreshLayers();
     }
 
@@ -1080,8 +1315,8 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         // Set visibility to the checkbox-bound VM value (already flipped by binding).
         bool target = item.IsVisible;
         // Revert VM briefly so command captures correct "before"
-        item.Layer.IsVisible = !target;
-        ws.History.Execute(LayerPropertyCommand.Visibility(item.Layer, target, ws.NotifyChanged));
+        item.Node.IsVisible = !target;
+        ws.History.Execute(LayerPropertyCommand.Visibility(item.Node, target, ws.NotifyChanged));
         item.SyncFromModel();
     }
 
@@ -1089,7 +1324,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     private void RenameSelectedLayer(string? name)
     {
         var ws = ActiveWorkspace;
-        if (ws?.Document.ActiveLayer is not { } layer || string.IsNullOrWhiteSpace(name)) return;
+        if (ws?.Document.ActiveNode is not { } layer || string.IsNullOrWhiteSpace(name)) return;
         ws.History.Execute(LayerPropertyCommand.Rename(layer, name.Trim(), ws.NotifyChanged));
         RefreshLayers();
     }
@@ -1149,6 +1384,185 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         {
             _objectSelectionBusy = false;
         }
+    }
+
+    /// <summary>
+    /// Edit → Content-Aware Fill (Shift+Backspace): rebuild the selected area with LaMa from what
+    /// shows at the active layer's level, onto a new layer just above it (the original stays
+    /// intact underneath; paint the new layer's mask to bring parts of it back). One undo step;
+    /// the selection stays for another pass.
+    /// </summary>
+    [RelayCommand]
+    private async Task ContentAwareFillAsync()
+    {
+        var ws = ActiveWorkspace;
+        if (ws is null || _busyStatus is not null) return;
+        if (!_contentAwareFill.IsAvailable)
+        {
+            StatusText = "Content-Aware Fill needs the AI model: run scripts\\Get-Models.ps1, then rebuild.";
+            return;
+        }
+        if (ws.IsTransforming)
+        {
+            StatusText = "Apply or cancel the transform first (Enter / Esc).";
+            return;
+        }
+        if (ws.IsEditingSelection)
+        {
+            ws.CommitSelectionEdit();
+            SyncTransformUi();
+        }
+        var layer = ws.Document.ActiveNode;
+        if (layer is null) return;
+        if (!ws.Selection.HasSelection)
+        {
+            StatusText = "Select what to remove first (Q: Object Selection), then Content-Aware Fill.";
+            return;
+        }
+
+        using var request = CreateFillRequest(ws, layer);
+        if (request is null) return;
+        var documentSize = (ws.Document.Width, ws.Document.Height);
+
+        string? outcome = null;
+        try
+        {
+            if (!_contentAwareFill.IsLoaded)
+            {
+                SetBusyStatus("Loading AI model…");
+                await _contentAwareFill.LoadAsync();
+            }
+            SetBusyStatus("Content-Aware Fill…");
+            using var result = await _contentAwareFill.FillAsync(request);
+            if (!_manager.Workspaces.Contains(ws)) return; // tab closed meanwhile
+
+            if (result is null)
+            {
+                outcome = "Nothing left around the selection to rebuild it from";
+            }
+            else
+            {
+                var fill = new Layer("Content-Aware Fill", result.Pixels.Clone(), result.Region.X, result.Region.Y);
+                if ((ws.Document.Width, ws.Document.Height) == documentSize &&
+                    ws.InsertNodeAbove(layer, fill, "Content-Aware Fill"))
+                {
+                    RefreshLayers();
+                    outcome = "Content-Aware Fill done on a new layer — Mask Brush (B) brings parts of the original back";
+                }
+                else
+                {
+                    fill.Dispose();
+                    outcome = "The document changed during Content-Aware Fill — try again";
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("Content-Aware Fill failed", ex);
+            outcome = "Content-Aware Fill failed — see log";
+        }
+        finally
+        {
+            _busyStatus = null;
+            if (outcome is null) UpdateStatus();
+            else StatusText = outcome;
+        }
+    }
+
+    /// <summary>Context for the fill: the visible stack up to the active entry (not what is above it).</summary>
+    private static InpaintRequest? CreateFillRequest(DocumentWorkspace ws, LayerNode layer)
+    {
+        using var visible = CompositionEngine.CompositeThrough(ws.Document, layer);
+        return InpaintProcessing.CreateRequest(visible, 0, 0, ws.Selection, ws.Document.Width, ws.Document.Height);
+    }
+
+    private void SetBusyStatus(string text)
+    {
+        _busyStatus = text;
+        StatusText = text;
+    }
+
+    // --- Layer masks ---
+
+    [RelayCommand]
+    private void SetToolMaskBrush()
+    {
+        if (ActiveWorkspace?.IsTransforming == true) ActiveWorkspace.CancelTransform();
+        if (ActiveWorkspace?.IsEditingSelection == true) ActiveWorkspace.CommitSelectionEdit();
+        CurrentTool = CanvasTool.MaskBrush;
+        SyncTransformUi();
+    }
+
+    /// <summary>X: swap Hide (black) and Reveal (white).</summary>
+    [RelayCommand]
+    private void SwapMaskBrushColor() => MaskBrushReveal = !MaskBrushReveal;
+
+    /// <summary>[ / ]: brush size down / up by about 15%.</summary>
+    public void StepMaskBrushSize(int direction)
+    {
+        double size = (double)MaskBrushSizeValue;
+        size = direction > 0 ? Math.Max(size + 1, size * 1.15) : Math.Min(size - 1, size / 1.15);
+        MaskBrushSizeValue = (decimal)Math.Round(Math.Clamp(size, MaskBrushOptions.MinSize, MaskBrushOptions.MaxSize));
+    }
+
+    /// <summary>{ / } (Shift+[ / ]): brush hardness down / up by 25%.</summary>
+    public void StepMaskBrushHardness(int direction) =>
+        MaskBrushHardness = Math.Clamp(MaskBrushHardness + 25 * Math.Sign(direction), 0, 100);
+
+    /// <summary>The canvas finished a Mask Brush stroke: the layer may have just got a mask.</summary>
+    public void OnMaskStrokeFinished() => RefreshLayers();
+
+    [RelayCommand]
+    private void AddLayerMask()
+    {
+        var ws = ActiveWorkspace;
+        if (ws?.Document.ActiveLayer is not { } layer) return;
+        if (layer.HasMask)
+        {
+            StatusText = "The layer already has a mask — paint it with the Mask Brush (B).";
+            return;
+        }
+        if (!ws.AddLayerMask()) return;
+        RefreshLayers();
+        StatusText = ws.Selection.HasSelection
+            ? "Layer mask added: only the selection shows"
+            : "Layer mask added — Mask Brush (B): black hides, white reveals";
+    }
+
+    [RelayCommand]
+    private void DeleteLayerMask()
+    {
+        var ws = ActiveWorkspace;
+        if (ws is null) return;
+        if (!ws.DeleteLayerMask())
+        {
+            StatusText = "The active layer has no mask.";
+            return;
+        }
+        RefreshLayers();
+    }
+
+    [RelayCommand]
+    private void ApplyLayerMask()
+    {
+        var ws = ActiveWorkspace;
+        if (ws is null) return;
+        if (!ws.ApplyLayerMask())
+        {
+            StatusText = "The active layer has no mask.";
+            return;
+        }
+        RefreshLayers();
+        StatusText = "Layer mask applied to the layer's transparency";
+    }
+
+    [RelayCommand]
+    private void SetToolPolygonLasso()
+    {
+        if (ActiveWorkspace?.IsTransforming == true) ActiveWorkspace.CancelTransform();
+        if (ActiveWorkspace?.IsEditingSelection == true) ActiveWorkspace.CommitSelectionEdit();
+        CurrentTool = CanvasTool.PolygonLasso;
+        SyncTransformUi();
     }
 
     [RelayCommand]
@@ -1298,7 +1712,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         var ws = ActiveWorkspace;
         if (ws is null) return;
         opacity = Math.Clamp(opacity, 0f, 1f);
-        item.Layer.Opacity = opacity;
+        item.Node.Opacity = opacity;
         item.Opacity = opacity;
         TransformOpacity = opacity;
         // NotifyChanged (not InvalidateComposite alone) so ImageCanvas rebuilds the bitmap.
@@ -1318,37 +1732,30 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         }
 
         // History command captures before/after explicitly (preview may already have set layer).
-        item.Layer.Opacity = from;
-        ws.History.Execute(LayerPropertyCommand.Opacity(item.Layer, from, to, ws.NotifyChanged));
+        item.Node.Opacity = from;
+        ws.History.Execute(LayerPropertyCommand.Opacity(item.Node, from, to, ws.NotifyChanged));
         item.SyncFromModel();
         TransformOpacity = item.Opacity;
     }
 
     public void ApplyLayerOpacity(LayerItemViewModel item, float opacity)
     {
-        CommitLayerOpacity(item, item.Layer.Opacity, opacity);
+        CommitLayerOpacity(item, item.Node.Opacity, opacity);
     }
 
     public void ApplyLayerBlendMode(LayerItemViewModel item, BlendMode blendMode)
     {
         var ws = ActiveWorkspace;
         if (ws is null) return;
-        if (item.Layer.BlendMode == blendMode)
+        if (item.Node.BlendMode == blendMode)
         {
             item.SyncFromModel();
             return;
         }
 
-        ws.History.Execute(LayerPropertyCommand.BlendModeChange(item.Layer, blendMode, ws.NotifyChanged));
+        ws.History.Execute(LayerPropertyCommand.BlendModeChange(item.Node, blendMode, ws.NotifyChanged));
         item.SyncFromModel();
         SelectedBlendOption = BlendModeNames.GetOption(item.BlendMode);
-    }
-
-    private static int IndexOf(PaintDocument doc, Guid id)
-    {
-        for (int i = 0; i < doc.Layers.Count; i++)
-            if (doc.Layers[i].Id == id) return i;
-        return -1;
     }
 
     private static string FormatColorMode(DocumentColorSettings s)
@@ -1368,6 +1775,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     {
         _manager.Dispose();
         _objectSelection.Dispose();
+        _contentAwareFill.Dispose();
         GC.SuppressFinalize(this);
     }
 }

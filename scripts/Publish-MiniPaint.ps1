@@ -84,13 +84,13 @@ if (Test-Path $OutDir) {
 
 New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 
-# Object Selection AI models (MobileSAM) must ship with the release.
+# AI models (MobileSAM for Object Selection, LaMa for Content-Aware Fill) must ship with the release.
 try {
   & (Join-Path $PSScriptRoot "Get-Models.ps1")
 }
 catch {
   Set-Content -LiteralPath $BuildNumberFile -Value "$previous" -Encoding ascii -NoNewline
-  throw "Cannot get the MobileSAM models (scripts\Get-Models.ps1): $($_.Exception.Message) (build number restored to $previous)"
+  throw "Cannot get the AI models (scripts\Get-Models.ps1): $($_.Exception.Message) (build number restored to $previous)"
 }
 
 dotnet publish $Project `

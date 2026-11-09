@@ -13,10 +13,10 @@ echo  (pas de publish, pas de bump, pas de Release GitHub)
 echo ========================================
 echo.
 
-REM Object Selection AI models (MobileSAM, ~45 MB, cached after the first download).
+REM AI models: MobileSAM (Object Selection) + LaMa (Content-Aware Fill), ~250 MB, cached after the first download.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\Get-Models.ps1"
 if not %ERRORLEVEL%==0 (
-  echo ATTENTION: modeles IA non telecharges - l'outil Object Selection sera desactive.
+  echo ATTENTION: modeles IA non telecharges - Object Selection et Content-Aware Fill seront desactives.
   echo.
 )
 

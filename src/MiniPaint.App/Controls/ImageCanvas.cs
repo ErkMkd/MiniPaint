@@ -18,11 +18,13 @@ public enum CanvasTool
 {
     Pan,
     RectSelect,
+    PolygonLasso,
     MagicWand,
     ObjectSelect,
     SelectionEdit,
     MoveLayer,
-    FreeTransform
+    FreeTransform,
+    MaskBrush
 }
 
 /// <summary>
@@ -42,6 +44,13 @@ public sealed class ImageCanvas : Control
 
     public static readonly StyledProperty<MagicWandOptions> WandOptionsProperty =
         AvaloniaProperty.Register<ImageCanvas, MagicWandOptions>(nameof(WandOptions), new MagicWandOptions());
+
+    /// <summary>Polygonal Lasso: anti-aliased edges (photos) or hard pixel edges.</summary>
+    public static readonly StyledProperty<bool> LassoAntiAliasProperty =
+        AvaloniaProperty.Register<ImageCanvas, bool>(nameof(LassoAntiAlias), true);
+
+    public static readonly StyledProperty<MaskBrushOptions> MaskBrushProperty =
+        AvaloniaProperty.Register<ImageCanvas, MaskBrushOptions>(nameof(MaskBrush), new MaskBrushOptions(60, 0, 1, false));
 
     private WriteableBitmap? _bitmap;
     /// <summary>Workspace + composite version currently uploaded into <see cref="_bitmap"/>.</summary>
@@ -73,6 +82,19 @@ public sealed class ImageCanvas : Control
     private bool _objectDragging;
     private SelectionCombineMode _objectMode;
     private Point _objectPressScreen;
+
+    /// <summary>Polygonal Lasso in progress: corners placed so far and the pointer (document coords).</summary>
+    private readonly List<Point> _lassoCorners = new();
+    private Point _lassoPointer;
+    private SelectionCombineMode _lassoMode;
+
+    /// <summary>Clicking within this many screen pixels of the first corner closes the polygon.</summary>
+    private const double LassoCloseRadius = 7;
+
+    /// <summary>Mask Brush: stroke in progress, and where the brush outline is drawn (null = pointer away).</summary>
+    private bool _maskPainting;
+    private Point? _brushHover;
+    private Cursor? _hiddenCursor;
 
     /// <summary>Above this many outline segments the ants stop animating (redraw cost).</summary>
     private const int AntsAnimationSegmentLimit = 20_000;
@@ -121,18 +143,33 @@ public sealed class ImageCanvas : Control
         set => SetValue(WandOptionsProperty, value);
     }
 
+    public bool LassoAntiAlias
+    {
+        get => GetValue(LassoAntiAliasProperty);
+        set => SetValue(LassoAntiAliasProperty, value);
+    }
+
+    public MaskBrushOptions MaskBrush
+    {
+        get => GetValue(MaskBrushProperty);
+        set => SetValue(MaskBrushProperty, value);
+    }
+
     public event Action? StatusChanged;
     public event Action? TransformModeChanged;
 
     /// <summary>Object Selection: a click (point) or dragged box, and how to combine the result.</summary>
     public event Action<SamPrompt, SelectionCombineMode>? ObjectSelectionRequested;
 
+    /// <summary>A Mask Brush stroke ended (the layer may have just got a mask).</summary>
+    public event Action? MaskStrokeFinished;
+
     public int CursorDocX { get; private set; }
     public int CursorDocY { get; private set; }
 
     static ImageCanvas()
     {
-        AffectsRender<ImageCanvas>(WorkspaceProperty, ToolProperty);
+        AffectsRender<ImageCanvas>(WorkspaceProperty, ToolProperty, MaskBrushProperty);
         FocusableProperty.OverrideDefaultValue<ImageCanvas>(true);
     }
 
@@ -144,7 +181,7 @@ public sealed class ImageCanvas : Control
         {
             _antsPhase = (_antsPhase + 1) % 16;
             var ws = Workspace;
-            if (_selecting || _objectDragging ||
+            if (_selecting || _objectDragging || _lassoCorners.Count > 0 ||
                 ws?.IsTransforming == true ||
                 ws?.IsEditingSelection == true ||
                 (ws?.Selection.HasSelection == true &&
@@ -159,6 +196,7 @@ public sealed class ImageCanvas : Control
         base.OnPropertyChanged(change);
         if (change.Property == WorkspaceProperty)
         {
+            CancelLasso();
             if (change.OldValue is DocumentWorkspace oldWs)
                 oldWs.Changed -= OnWorkspaceChanged;
             if (change.NewValue is DocumentWorkspace newWs)
@@ -167,6 +205,12 @@ public sealed class ImageCanvas : Control
             }
             InvalidateVisual();
             StatusChanged?.Invoke();
+        }
+        else if (change.Property == ToolProperty)
+        {
+            CancelLasso();
+            // The brush draws its own outline instead of the system cursor.
+            Cursor = Tool == CanvasTool.MaskBrush ? _hiddenCursor ??= new Cursor(StandardCursorType.None) : Cursor.Default;
         }
     }
 
@@ -217,6 +261,29 @@ public sealed class ImageCanvas : Control
             {
                 ws.CancelSelectionEdit();
                 TransformModeChanged?.Invoke();
+                e.Handled = true;
+                return;
+            }
+        }
+
+        if (_lassoCorners.Count > 0 && ws is not null)
+        {
+            if (e.Key == Key.Enter)
+            {
+                CloseLasso(ws);
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.Escape)
+            {
+                CancelLasso();
+                e.Handled = true;
+                return;
+            }
+            if (e.Key is Key.Back or Key.Delete)
+            {
+                _lassoCorners.RemoveAt(_lassoCorners.Count - 1);
+                InvalidateVisual();
                 e.Handled = true;
                 return;
             }
@@ -302,6 +369,18 @@ public sealed class ImageCanvas : Control
             return;
         }
 
+        if (Tool == CanvasTool.MaskBrush)
+        {
+            if (ws.BeginMaskStroke(MaskBrush))
+            {
+                _maskPainting = true;
+                ws.ContinueMaskStroke((p.X - ws.PanX) / ws.Zoom, (p.Y - ws.PanY) / ws.Zoom);
+                e.Pointer.Capture(this);
+            }
+            e.Handled = true;
+            return;
+        }
+
         if (Tool == CanvasTool.SelectionEdit || ws.IsEditingSelection)
         {
             if (!ws.IsEditingSelection && !ws.BeginSelectionEdit())
@@ -314,6 +393,30 @@ public sealed class ImageCanvas : Control
             e.Handled = true;
             TransformModeChanged?.Invoke();
             InvalidateVisual();
+            return;
+        }
+
+        if (Tool == CanvasTool.PolygonLasso)
+        {
+            var at = new Point((p.X - ws.PanX) / ws.Zoom, (p.Y - ws.PanY) / ws.Zoom);
+            if (_lassoCorners.Count == 0)
+            {
+                // Shift / Alt at the first click choose how it combines (later, Shift snaps to 45°).
+                _lassoMode = CombineModeFrom(e.KeyModifiers);
+                _lassoCorners.Add(at);
+            }
+            else if (e.ClickCount >= 2 || NearLassoStart(ws, p))
+            {
+                CloseLasso(ws);
+            }
+            else
+            {
+                _lassoCorners.Add(LassoPoint(at, e.KeyModifiers));
+            }
+            _lassoPointer = at;
+            e.Handled = true;
+            InvalidateVisual();
+            StatusChanged?.Invoke();
             return;
         }
 
@@ -668,6 +771,16 @@ public sealed class ImageCanvas : Control
             return;
         }
 
+        if (Tool == CanvasTool.MaskBrush)
+        {
+            _brushHover = p;
+            if (_maskPainting)
+                ws.ContinueMaskStroke((p.X - ws.PanX) / ws.Zoom, (p.Y - ws.PanY) / ws.Zoom);
+            InvalidateVisual();
+            e.Handled = true;
+            return;
+        }
+
         if (ws.IsTransforming && ws.ActiveTransform is not null &&
             (_scaleIx is not null || _rotateIx is not null || _moveIx is not null))
         {
@@ -730,6 +843,15 @@ public sealed class ImageCanvas : Control
             return;
         }
 
+        if (_lassoCorners.Count > 0)
+        {
+            _lassoPointer = LassoPoint(new Point((p.X - ws.PanX) / ws.Zoom, (p.Y - ws.PanY) / ws.Zoom), e.KeyModifiers);
+            Cursor = new Cursor(StandardCursorType.Cross);
+            InvalidateVisual();
+            e.Handled = true;
+            return;
+        }
+
         if (_selecting || _objectDragging)
         {
             (_selCurX, _selCurY) = ws.ScreenToDocument(p.X, p.Y);
@@ -770,7 +892,7 @@ public sealed class ImageCanvas : Control
         {
             Cursor = new Cursor(StandardCursorType.SizeAll);
         }
-        else if (Tool is CanvasTool.MagicWand or CanvasTool.ObjectSelect)
+        else if (Tool is CanvasTool.MagicWand or CanvasTool.ObjectSelect or CanvasTool.PolygonLasso)
         {
             Cursor = new Cursor(StandardCursorType.Cross);
         }
@@ -807,6 +929,7 @@ public sealed class ImageCanvas : Control
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         var ws = Workspace;
+        EndMaskStroke(ws);
 
         // Commit floating pixels before clamping the marquee (clamp may clear an off-canvas sel).
         if (_floatingPixels is not null && ws is not null)
@@ -861,6 +984,73 @@ public sealed class ImageCanvas : Control
         _activeHandle = TransformHandle.None;
         e.Pointer.Capture(null);
         base.OnPointerReleased(e);
+    }
+
+    /// <summary>The next corner: the pointer, or with Shift its side snapped to 45°.</summary>
+    private Point LassoPoint(Point docPoint, KeyModifiers modifiers)
+    {
+        if (!modifiers.HasFlag(KeyModifiers.Shift) || _lassoCorners.Count == 0) return docPoint;
+        var last = _lassoCorners[^1];
+        var (x, y) = PolygonSelection.Constrain45((last.X, last.Y), (docPoint.X, docPoint.Y));
+        return new Point(x, y);
+    }
+
+    private bool NearLassoStart(DocumentWorkspace ws, Point screen)
+    {
+        if (_lassoCorners.Count < 3) return false;
+        var start = _lassoCorners[0];
+        double dx = start.X * ws.Zoom + ws.PanX - screen.X;
+        double dy = start.Y * ws.Zoom + ws.PanY - screen.Y;
+        return dx * dx + dy * dy <= LassoCloseRadius * LassoCloseRadius;
+    }
+
+    /// <summary>Close the polygon and combine it into the selection (one undo step).</summary>
+    private void CloseLasso(DocumentWorkspace ws)
+    {
+        var corners = _lassoCorners.Select(c => (c.X, c.Y)).ToList();
+        _lassoCorners.Clear();
+        if (corners.Count >= 3)
+        {
+            try
+            {
+                var picked = PolygonSelection.Rasterize(corners, LassoAntiAlias, ws.Document.Width, ws.Document.Height);
+                ws.ApplySelection(picked, _lassoMode, "Polygonal Lasso");
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error("Polygonal Lasso failed", ex);
+            }
+        }
+        InvalidateVisual();
+        StatusChanged?.Invoke();
+    }
+
+    private void CancelLasso()
+    {
+        if (_lassoCorners.Count == 0) return;
+        _lassoCorners.Clear();
+        InvalidateVisual();
+    }
+
+    protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
+    {
+        EndMaskStroke(Workspace); // e.g. the window lost focus mid-stroke
+        base.OnPointerCaptureLost(e);
+    }
+
+    protected override void OnPointerExited(PointerEventArgs e)
+    {
+        _brushHover = null;
+        InvalidateVisual();
+        base.OnPointerExited(e);
+    }
+
+    private void EndMaskStroke(DocumentWorkspace? ws)
+    {
+        if (!_maskPainting) return;
+        _maskPainting = false;
+        ws?.EndMaskStroke();
+        MaskStrokeFinished?.Invoke();
     }
 
     private SelectionCombineMode CombineModeFrom(KeyModifiers mods)
@@ -930,6 +1120,32 @@ public sealed class ImageCanvas : Control
 
         if (_selecting || _objectDragging)
             DrawMarquee(context, ws);
+
+        if (_lassoCorners.Count > 0)
+            DrawLasso(context, ws);
+
+        if (Tool == CanvasTool.MaskBrush && _brushHover is { } brushAt && !ws.IsTransforming)
+            DrawBrushOutline(context, ws, brushAt);
+    }
+
+    /// <summary>Brush size circle (black and white, visible on any image); a cross when it gets tiny.</summary>
+    private void DrawBrushOutline(DrawingContext context, DocumentWorkspace ws, Point center)
+    {
+        var dark = new Pen(new SolidColorBrush(Color.FromArgb(200, 0, 0, 0)), 1);
+        var light = new Pen(new SolidColorBrush(Color.FromArgb(220, 255, 255, 255)), 1);
+        double r = MaskBrush.Size / 2 * ws.Zoom;
+        if (r >= 3)
+        {
+            context.DrawEllipse(null, dark, center, r + 0.5, r + 0.5);
+            context.DrawEllipse(null, light, center, r - 0.5, r - 0.5);
+        }
+        if (r < 6)
+        {
+            context.DrawLine(dark, center + new Vector(-6, 0.5), center + new Vector(6, 0.5));
+            context.DrawLine(dark, center + new Vector(0.5, -6), center + new Vector(0.5, 6));
+            context.DrawLine(light, center + new Vector(-5, -0.5), center + new Vector(5, -0.5));
+            context.DrawLine(light, center + new Vector(-0.5, -5), center + new Vector(-0.5, 5));
+        }
     }
 
     private void DrawFloatingSelection(DrawingContext context, DocumentWorkspace ws)
@@ -1189,6 +1405,35 @@ public sealed class ImageCanvas : Control
         int h = Math.Abs(_selCurY - _selStartY);
         if (w == 0 || h == 0) return;
         DrawAntsRect(context, DocToScreen(ws, x0, y0, w, h));
+    }
+
+    /// <summary>The polygon so far, the side following the pointer, and a ring on the first corner when a click there closes it.</summary>
+    private void DrawLasso(DrawingContext context, DocumentWorkspace ws)
+    {
+        Point Screen(Point doc) => new(ws.PanX + doc.X * ws.Zoom, ws.PanY + doc.Y * ws.Zoom);
+        var geometry = new StreamGeometry();
+        using (var g = geometry.Open())
+        {
+            g.BeginFigure(Screen(_lassoCorners[0]), isFilled: false);
+            for (int i = 1; i < _lassoCorners.Count; i++)
+                g.LineTo(Screen(_lassoCorners[i]));
+            g.LineTo(Screen(_lassoPointer));
+            g.EndFigure(isClosed: false);
+        }
+        context.DrawGeometry(null, new Pen(Brushes.Black, 1), geometry);
+        context.DrawGeometry(null, new Pen(Brushes.White, 1)
+        {
+            DashStyle = new DashStyle(new double[] { 4, 4 }, _antsPhase)
+        }, geometry);
+
+        var start = Screen(_lassoCorners[0]);
+        var pointer = Screen(_lassoPointer);
+        double dx = start.X - pointer.X, dy = start.Y - pointer.Y;
+        if (_lassoCorners.Count >= 3 && dx * dx + dy * dy <= LassoCloseRadius * LassoCloseRadius)
+        {
+            context.DrawEllipse(null, new Pen(Brushes.Black, 3), start, LassoCloseRadius - 1, LassoCloseRadius - 1);
+            context.DrawEllipse(null, new Pen(Brushes.White, 1.5), start, LassoCloseRadius - 1, LassoCloseRadius - 1);
+        }
     }
 
     private void DrawAntsRect(DrawingContext context, Rect rect)

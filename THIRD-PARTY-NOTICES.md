@@ -1,7 +1,7 @@
 # Third-party notices
 
-MiniPaint itself is MIT licensed (see LICENSE). The **Object Selection** tool runs an AI model
-locally with the components below; their notices are reproduced here as their licenses require.
+MiniPaint itself is MIT licensed (see LICENSE). **Object Selection** and **Content-Aware Fill** run
+AI models locally with the components below; their notices are reproduced here as their licenses require.
 
 ## MobileSAM model weights
 
@@ -20,6 +20,18 @@ locally with the components below; their notices are reproduced here as their li
 
 - Source: <https://huggingface.co/Acly/MobileSAM> (pinned revision `0d3b403339b4674a82493d5e97964dd78089ddc8`)
 - License: MIT License (text below)
+
+## LaMa model weights (Content-Aware Fill)
+
+- Project: LaMa, Resolution-robust Large Mask Inpainting with Fourier Convolutions — <https://github.com/advimman/lama>
+- License: Apache License 2.0 (full text below)
+- File: `Models/LaMa/lama_fp32.onnx`
+
+## ONNX export of LaMa
+
+- Source: <https://huggingface.co/Carve/LaMa-ONNX> (pinned revision `c3c0c9e468934d62e79c329e35d82dd09ff8c444`)
+- Export code: <https://github.com/Carve-Photos/lama>
+- License: Apache License 2.0 (full text below)
 
 ## ONNX Runtime
 

@@ -4,18 +4,26 @@ using System.Text.Json.Serialization;
 using MiniPaint.Core.ColorMode;
 using MiniPaint.Core.Composition;
 using MiniPaint.Core.Document;
+using MiniPaint.Core.Filters;
 using MiniPaint.Core.Imaging;
 
 namespace MiniPaint.Core.Project;
 
 /// <summary>
-/// Native .minipaint format: ZIP containing manifest.json + layer_N.png files.
-/// Preserves layers, offsets, opacity, blend mode, visibility, and document dimensions.
+/// Native .minipaint format: ZIP containing manifest.json + layer_N.png files (+ mask_N.png,
+/// grayscale, for layers with a mask). Preserves layers, offsets, opacity, blend mode,
+/// visibility, layer masks, groups, filters and document dimensions.
 /// </summary>
 public static class ProjectSerializer
 {
     public const string Extension = ".minipaint";
-    private const int FormatVersion = 1;
+
+    /// <summary>
+    /// Version 2 adds layer masks, version 3 groups and filters (a "nodes" tree instead of the flat
+    /// "layers" list). A file is written with the lowest version that holds it, so projects that
+    /// do not use the newer features still open in older MiniPaint builds.
+    /// </summary>
+    private const int FormatVersion = 3;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -41,13 +49,18 @@ public static class ProjectSerializer
         {
             var cs = document.ColorSettings;
             cs.Sanitize();
+            var layers = document.Layers;
+            var allNodes = document.AllNodes.ToList();
+            bool tree = allNodes.Any(n => n is LayerGroup || n.Filters.Count > 0);
             var manifest = new ProjectManifest
             {
-                Version = FormatVersion,
+                Version = tree ? 3 : layers.Any(l => l.HasMask) ? 2 : 1,
                 Name = document.Name,
                 Width = document.Width,
                 Height = document.Height,
-                ActiveLayerIndex = IndexOf(document, document.ActiveLayerId),
+                ActiveLayerIndex = tree
+                    ? allNodes.FindIndex(n => n.Id == document.ActiveLayerId)
+                    : IndexOf(layers, document.ActiveLayerId),
                 ColorMode = cs.Mode.ToString(),
                 ColorCount = cs.ColorCount,
                 HalfBright = cs.HalfBright,
@@ -55,7 +68,7 @@ public static class ProjectSerializer
                 Dither = cs.Dither.ToString(),
                 PaletteCustomized = cs.PaletteCustomized,
                 Palette = cs.Palette?.Select(c => $"{c.R:X2}{c.G:X2}{c.B:X2}").ToList(),
-                Layers = document.Layers.Select((l, i) => new LayerManifest
+                Layers = tree ? null : layers.Select((l, i) => new LayerManifest
                 {
                     Name = l.Name,
                     Visible = l.IsVisible,
@@ -63,8 +76,10 @@ public static class ProjectSerializer
                     BlendMode = l.BlendMode.ToString(),
                     OffsetX = l.OffsetX,
                     OffsetY = l.OffsetY,
-                    File = $"layers/layer_{i:D3}.png"
-                }).ToList()
+                    File = LayerFile(i),
+                    Mask = l.HasMask ? MaskFile(i) : null
+                }).ToList(),
+                Nodes = tree ? NodesOf(document.Root, layers) : null
             };
 
             var manifestEntry = zip.CreateEntry("manifest.json", CompressionLevel.Optimal);
@@ -73,12 +88,20 @@ public static class ProjectSerializer
                 writer.Write(JsonSerializer.Serialize(manifest, JsonOptions));
             }
 
-            for (int i = 0; i < document.Layers.Count; i++)
+            for (int i = 0; i < layers.Count; i++)
             {
-                var layer = document.Layers[i];
-                var entry = zip.CreateEntry($"layers/layer_{i:D3}.png", CompressionLevel.Optimal);
-                using var entryStream = entry.Open();
-                ImageCodec.SavePng(layer.Pixels, entryStream);
+                var layer = layers[i];
+                var entry = zip.CreateEntry(LayerFile(i), CompressionLevel.Optimal);
+                using (var entryStream = entry.Open())
+                    ImageCodec.SavePng(layer.Pixels, entryStream);
+
+                if (layer.Mask is { } mask)
+                {
+                    var maskEntry = zip.CreateEntry(MaskFile(i), CompressionLevel.Optimal);
+                    using var maskStream = maskEntry.Open();
+                    using var gray = MaskToGray(mask, layer.Pixels.Width, layer.Pixels.Height);
+                    ImageCodec.SavePng(gray, maskStream);
+                }
             }
         }
 
@@ -114,33 +137,38 @@ public static class ProjectSerializer
             ProjectPath = path
         };
 
-        // Clear default — PaintDocument starts empty; we add from file.
-        foreach (var layerInfo in manifest.Layers)
+        if (manifest.Nodes is { } nodes)
         {
-            var entry = zip.GetEntry(layerInfo.File)
-                ?? throw new InvalidOperationException($"Missing layer file: {layerInfo.File}");
-            using var stream = entry.Open();
-            using var ms = new MemoryStream();
-            stream.CopyTo(ms);
-            ms.Position = 0;
-            var pixels = ImageCodec.Load(ms);
-            BlendModeNames.TryParse(layerInfo.BlendMode, out var blendMode);
-            var layer = new Layer(layerInfo.Name, pixels, layerInfo.OffsetX, layerInfo.OffsetY)
+            foreach (var node in nodes)
+                doc.AddNode(LoadNode(zip, node), doc.Root);
+        }
+        else
+        {
+            foreach (var layerInfo in manifest.Layers ?? [])
             {
-                IsVisible = layerInfo.Visible,
-                Opacity = layerInfo.Opacity,
-                BlendMode = blendMode
-            };
-            doc.AddLayer(layer);
+                doc.AddLayer(LoadLayer(zip, new NodeManifest
+                {
+                    Name = layerInfo.Name,
+                    Visible = layerInfo.Visible,
+                    Opacity = layerInfo.Opacity,
+                    BlendMode = layerInfo.BlendMode,
+                    OffsetX = layerInfo.OffsetX,
+                    OffsetY = layerInfo.OffsetY,
+                    File = layerInfo.File,
+                    Mask = layerInfo.Mask
+                }));
+            }
         }
 
         if (doc.Layers.Count == 0)
             throw new InvalidOperationException("Project contains no layers.");
 
-        if (manifest.ActiveLayerIndex >= 0 && manifest.ActiveLayerIndex < doc.Layers.Count)
-            doc.ActiveLayerId = doc.Layers[manifest.ActiveLayerIndex].Id;
-        else
-            doc.ActiveLayerId = doc.Layers[^1].Id;
+        var active = manifest.Nodes is not null
+            ? doc.AllNodes.ElementAtOrDefault(manifest.ActiveLayerIndex)
+            : manifest.ActiveLayerIndex >= 0 && manifest.ActiveLayerIndex < doc.Layers.Count
+                ? doc.Layers[manifest.ActiveLayerIndex]
+                : null;
+        doc.ActiveLayerId = (active ?? doc.Layers[^1]).Id;
 
         if (Enum.TryParse<ColorModeKind>(manifest.ColorMode, ignoreCase: true, out var mode))
             doc.ColorSettings.Mode = mode;
@@ -213,11 +241,126 @@ public static class ProjectSerializer
         return composite;
     }
 
-    private static int IndexOf(PaintDocument document, Guid? id)
+    private static string LayerFile(int index) => $"layers/layer_{index:D3}.png";
+    private static string MaskFile(int index) => $"layers/mask_{index:D3}.png";
+
+    private static List<NodeManifest> NodesOf(LayerGroup group, IReadOnlyList<Layer> layers)
+    {
+        var list = new List<NodeManifest>(group.Children.Count);
+        foreach (var node in group.Children)
+        {
+            var info = new NodeManifest
+            {
+                Name = node.Name,
+                Visible = node.IsVisible,
+                Opacity = node.Opacity,
+                BlendMode = node.BlendMode.ToString(),
+                Filters = node.Filters.Count > 0 ? node.Filters.Select(FilterManifest.From).ToList() : null
+            };
+            if (node is Layer layer)
+            {
+                int i = IndexOf(layers, layer.Id);
+                info.OffsetX = layer.OffsetX;
+                info.OffsetY = layer.OffsetY;
+                info.File = LayerFile(i);
+                info.Mask = layer.HasMask ? MaskFile(i) : null;
+            }
+            else if (node is LayerGroup child)
+            {
+                info.Type = "group";
+                info.Expanded = child.IsExpanded;
+                info.Children = NodesOf(child, layers);
+            }
+            list.Add(info);
+        }
+        return list;
+    }
+
+    private static LayerNode LoadNode(ZipArchive zip, NodeManifest info)
+    {
+        if (info.Type != "group")
+            return LoadLayer(zip, info);
+
+        BlendModeNames.TryParse(info.BlendMode, out var blendMode);
+        var group = new LayerGroup(info.Name)
+        {
+            IsVisible = info.Visible,
+            Opacity = info.Opacity,
+            BlendMode = blendMode,
+            IsExpanded = info.Expanded ?? true,
+            Filters = LoadFilters(info.Filters)
+        };
+        foreach (var child in info.Children ?? [])
+            group.Insert(group.Children.Count, LoadNode(zip, child));
+        return group;
+    }
+
+    private static Layer LoadLayer(ZipArchive zip, NodeManifest info)
+    {
+        if (info.File is not { } file)
+            throw new InvalidOperationException($"Layer '{info.Name}' has no image file.");
+        var pixels = LoadImage(zip, file, "layer");
+        BlendModeNames.TryParse(info.BlendMode, out var blendMode);
+        var layer = new Layer(info.Name, pixels, info.OffsetX, info.OffsetY)
+        {
+            IsVisible = info.Visible,
+            Opacity = info.Opacity,
+            BlendMode = blendMode,
+            Filters = LoadFilters(info.Filters)
+        };
+        if (info.Mask is { } maskFile)
+        {
+            using var gray = LoadImage(zip, maskFile, "mask");
+            if (gray.Width != pixels.Width || gray.Height != pixels.Height)
+                throw new InvalidOperationException($"Mask {maskFile} does not match its layer size.");
+            layer.SetMask(GrayToMask(gray));
+        }
+        return layer;
+    }
+
+    /// <summary>Filters of a kind this build does not know are left out.</summary>
+    private static LayerFilter[] LoadFilters(List<FilterManifest>? filters) =>
+        filters?.Select(f => f.ToFilter()).OfType<LayerFilter>().ToArray() ?? [];
+
+    private static PixelBuffer LoadImage(ZipArchive zip, string file, string kind)
+    {
+        var entry = zip.GetEntry(file)
+            ?? throw new InvalidOperationException($"Missing {kind} file: {file}");
+        using var stream = entry.Open();
+        using var ms = new MemoryStream();
+        stream.CopyTo(ms);
+        ms.Position = 0;
+        return ImageCodec.Load(ms);
+    }
+
+    /// <summary>Opaque gray image of a mask (white shows, black hides), readable in any viewer.</summary>
+    private static PixelBuffer MaskToGray(byte[] mask, int width, int height)
+    {
+        var gray = new PixelBuffer(width, height);
+        var px = gray.Pixels;
+        for (int i = 0; i < mask.Length; i++)
+        {
+            int o = i * 4;
+            px[o] = px[o + 1] = px[o + 2] = mask[i];
+            px[o + 3] = 255;
+        }
+        return gray;
+    }
+
+    private static byte[] GrayToMask(PixelBuffer gray)
+    {
+        var px = gray.PixelsReadOnly;
+        var mask = new byte[gray.Width * gray.Height];
+        for (int i = 0; i < mask.Length; i++)
+            mask[i] = px[i * 4];
+        return mask;
+    }
+
+    private static int IndexOf(IReadOnlyList<Layer> layers, Guid? id)
     {
         if (id is null) return -1;
-        for (int i = 0; i < document.Layers.Count; i++)
-            if (document.Layers[i].Id == id) return i;
+        for (int i = 0; i < layers.Count; i++)
+            if (layers[i].Id == id) return i;
         return -1;
     }
 
@@ -235,7 +378,75 @@ public static class ProjectSerializer
         public string? Dither { get; set; }
         public bool? PaletteCustomized { get; set; }
         public List<string>? Palette { get; set; }
-        public List<LayerManifest> Layers { get; set; } = new();
+
+        /// <summary>Versions 1–2: the layers, bottom → top.</summary>
+        public List<LayerManifest>? Layers { get; set; }
+
+        /// <summary>Version 3: the layer tree, bottom → top (ActiveLayerIndex counts its entries depth-first).</summary>
+        public List<NodeManifest>? Nodes { get; set; }
+    }
+
+    private sealed class NodeManifest
+    {
+        /// <summary>"layer" or "group".</summary>
+        public string Type { get; set; } = "layer";
+        public string Name { get; set; } = "";
+        public bool Visible { get; set; } = true;
+        public float Opacity { get; set; } = 1f;
+        public string? BlendMode { get; set; }
+        public List<FilterManifest>? Filters { get; set; }
+        public int OffsetX { get; set; }
+        public int OffsetY { get; set; }
+        public string? File { get; set; }
+        public string? Mask { get; set; }
+        public bool? Expanded { get; set; }
+        public List<NodeManifest>? Children { get; set; }
+    }
+
+    private sealed class FilterManifest
+    {
+        /// <summary>"brightnessContrast", "hueSaturation" or "colorBalance".</summary>
+        public string Type { get; set; } = "";
+        public bool Enabled { get; set; } = true;
+        public int? Brightness { get; set; }
+        public int? Contrast { get; set; }
+        public int? Hue { get; set; }
+        public int? Saturation { get; set; }
+        public int? Value { get; set; }
+        /// <summary>Color balance per range: cyan–red, magenta–green, yellow–blue.</summary>
+        public int[]? Shadows { get; set; }
+        public int[]? Midtones { get; set; }
+        public int[]? Highlights { get; set; }
+        public bool? PreserveLuminosity { get; set; }
+
+        public static FilterManifest From(LayerFilter filter) => filter switch
+        {
+            BrightnessContrastFilter f => new() { Type = "brightnessContrast", Enabled = f.Enabled, Brightness = f.Brightness, Contrast = f.Contrast },
+            HueSaturationFilter f => new() { Type = "hueSaturation", Enabled = f.Enabled, Hue = f.Hue, Saturation = f.Saturation, Value = f.Value },
+            ColorBalanceFilter f => new()
+            {
+                Type = "colorBalance",
+                Enabled = f.Enabled,
+                Shadows = Shift(f.Shadows),
+                Midtones = Shift(f.Midtones),
+                Highlights = Shift(f.Highlights),
+                PreserveLuminosity = f.PreserveLuminosity
+            },
+            _ => throw new NotSupportedException($"Cannot save filter {filter.GetType().Name}.")
+        };
+
+        public LayerFilter? ToFilter() => Type switch
+        {
+            "brightnessContrast" => new BrightnessContrastFilter(Brightness ?? 0, Contrast ?? 0, Enabled),
+            "hueSaturation" => new HueSaturationFilter(Hue ?? 0, Saturation ?? 0, Value ?? 0, Enabled),
+            "colorBalance" => new ColorBalanceFilter(Shift(Shadows), Shift(Midtones), Shift(Highlights), PreserveLuminosity ?? true, Enabled),
+            _ => null
+        };
+
+        private static int[] Shift(ToneShift shift) => [shift.CyanRed, shift.MagentaGreen, shift.YellowBlue];
+
+        private static ToneShift Shift(int[]? values) =>
+            values is { Length: 3 } ? new ToneShift(values[0], values[1], values[2]) : default;
     }
 
     private sealed class LayerManifest
@@ -247,5 +458,6 @@ public static class ProjectSerializer
         public int OffsetX { get; set; }
         public int OffsetY { get; set; }
         public string File { get; set; } = "";
+        public string? Mask { get; set; }
     }
 }

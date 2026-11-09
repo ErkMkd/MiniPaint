@@ -1,0 +1,91 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:MiniPaint.App.ViewModels"
+        x:Class="MiniPaint.App.Views.FilterWindow"
+        x:DataType="vm:FilterDialogViewModel"
+        Width="440" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        Background="#2D2D30"
+        Foreground="#DDDDDD"
+        Title="{Binding Title}">
+
+  <Window.Styles>
+    <Style Selector="TextBlock.label">
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="Foreground" Value="#BBB" />
+    </Style>
+    <Style Selector="TextBlock.value">
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="HorizontalAlignment" Value="Right" />
+      <Setter Property="FontSize" Value="12" />
+      <Setter Property="Foreground" Value="#EEE" />
+    </Style>
+  </Window.Styles>
+
+  <DockPanel Margin="16">
+    <Grid DockPanel.Dock="Bottom" ColumnDefinitions="Auto,Auto,*,Auto,Auto" Margin="0,16,0,0">
+      <CheckBox Content="Preview" IsChecked="{Binding Preview}" VerticalAlignment="Center"
+                ToolTip.Tip="Show the result on the image while you adjust" />
+      <Button Grid.Column="1" Content="Reset" Margin="12,0,0,0" Click="OnResetClick"
+              ToolTip.Tip="Back to no change" />
+      <Button Grid.Column="3" Content="OK" Width="88" IsDefault="True" Click="OnOkClick" />
+      <Button Grid.Column="4" Content="Cancel" Width="88" Margin="8,0,0,0" IsCancel="True" Click="OnCancelClick" />
+    </Grid>
+
+    <StackPanel Spacing="10">
+      <!-- Brightness / Contrast -->
+      <Grid ColumnDefinitions="90,*,44" RowDefinitions="Auto,Auto" IsVisible="{Binding IsBrightnessContrast}">
+        <TextBlock Classes="label" Text="Brightness" />
+        <Slider Grid.Column="1" Minimum="-100" Maximum="100" Value="{Binding Brightness}" />
+        <TextBlock Grid.Column="2" Classes="value" Text="{Binding Brightness, StringFormat={}{0:0}}" />
+        <TextBlock Grid.Row="1" Classes="label" Text="Contrast" />
+        <Slider Grid.Row="1" Grid.Column="1" Minimum="-100" Maximum="100" Value="{Binding Contrast}" />
+        <TextBlock Grid.Row="1" Grid.Column="2" Classes="value" Text="{Binding Contrast, StringFormat={}{0:0}}" />
+      </Grid>
+
+      <!-- Hue / Saturation / Value -->
+      <Grid ColumnDefinitions="90,*,44" RowDefinitions="Auto,Auto,Auto" IsVisible="{Binding IsHueSaturation}">
+        <TextBlock Classes="label" Text="Hue" />
+        <Slider Grid.Column="1" Minimum="-180" Maximum="180" Value="{Binding Hue}" />
+        <TextBlock Grid.Column="2" Classes="value" Text="{Binding Hue, StringFormat={}{0:0}°}" />
+        <TextBlock Grid.Row="1" Classes="label" Text="Saturation" />
+        <Slider Grid.Row="1" Grid.Column="1" Minimum="-100" Maximum="100" Value="{Binding Saturation}" />
+        <TextBlock Grid.Row="1" Grid.Column="2" Classes="value" Text="{Binding Saturation, StringFormat={}{0:0}}" />
+        <TextBlock Grid.Row="2" Classes="label" Text="Value" />
+        <Slider Grid.Row="2" Grid.Column="1" Minimum="-100" Maximum="100" Value="{Binding Value}" />
+        <TextBlock Grid.Row="2" Grid.Column="2" Classes="value" Text="{Binding Value, StringFormat={}{0:0}}" />
+      </Grid>
+
+      <!-- Color Balance -->
+      <StackPanel Spacing="10" IsVisible="{Binding IsColorBalance}">
+        <StackPanel Orientation="Horizontal" Spacing="12">
+          <TextBlock Classes="label" Text="Tones" />
+          <RadioButton GroupName="Tone" Content="Shadows" IsChecked="{Binding IsShadows}" />
+          <RadioButton GroupName="Tone" Content="Midtones" IsChecked="{Binding IsMidtones}" />
+          <RadioButton GroupName="Tone" Content="Highlights" IsChecked="{Binding IsHighlights}" />
+        </StackPanel>
+        <Grid ColumnDefinitions="64,*,64,44" RowDefinitions="Auto,Auto,Auto">
+          <TextBlock Classes="label" Text="Cyan" />
+          <Slider Grid.Column="1" Minimum="-100" Maximum="100" Value="{Binding CyanRed}" />
+          <TextBlock Grid.Column="2" Classes="label" Text="Red" Margin="8,0,0,0" />
+          <TextBlock Grid.Column="3" Classes="value" Text="{Binding CyanRed, StringFormat={}{0:0}}" />
+          <TextBlock Grid.Row="1" Classes="label" Text="Magenta" />
+          <Slider Grid.Row="1" Grid.Column="1" Minimum="-100" Maximum="100" Value="{Binding MagentaGreen}" />
+          <TextBlock Grid.Row="1" Grid.Column="2" Classes="label" Text="Green" Margin="8,0,0,0" />
+          <TextBlock Grid.Row="1" Grid.Column="3" Classes="value" Text="{Binding MagentaGreen, StringFormat={}{0:0}}" />
+          <TextBlock Grid.Row="2" Classes="label" Text="Yellow" />
+          <Slider Grid.Row="2" Grid.Column="1" Minimum="-100" Maximum="100" Value="{Binding YellowBlue}" />
+          <TextBlock Grid.Row="2" Grid.Column="2" Classes="label" Text="Blue" Margin="8,0,0,0" />
+          <TextBlock Grid.Row="2" Grid.Column="3" Classes="value" Text="{Binding YellowBlue, StringFormat={}{0:0}}" />
+        </Grid>
+        <CheckBox Content="Preserve luminosity" IsChecked="{Binding PreserveLuminosity}"
+                  ToolTip.Tip="Change only the colors, not how bright each pixel is" />
+      </StackPanel>
+
+      <TextBlock Text="Non-destructive: edit, switch off or remove it later from the Filters list of the Layers panel."
+                 TextWrapping="Wrap" Foreground="#888" FontSize="11" />
+    </StackPanel>
+  </DockPanel>
+</Window>

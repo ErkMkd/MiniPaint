@@ -41,6 +41,9 @@
         <MenuItem Header="Cu_t" Command="{Binding CutCommand}" InputGesture="Ctrl+X" />
         <MenuItem Header="_Copy" Command="{Binding CopyCommand}" InputGesture="Ctrl+C" />
         <MenuItem Header="_Paste" Command="{Binding PasteCommand}" InputGesture="Ctrl+V" />
+        <MenuItem Header="Content-_Aware Fill" Command="{Binding ContentAwareFillCommand}" InputGesture="Shift+Back"
+                  IsEnabled="{Binding IsContentAwareFillAvailable}"
+                  ToolTip.Tip="{Binding ContentAwareFillTip}" ToolTip.ShowOnDisabled="True" />
         <Separator />
         <MenuItem Header="_Free Transform" Command="{Binding ToggleFreeTransformCommand}" InputGesture="Ctrl+T" />
         <MenuItem Header="_Apply Transform" Command="{Binding CommitTransformCommand}" InputGesture="Enter" />
@@ -71,8 +74,27 @@
         <MenuItem Header="_Duplicate" Command="{Binding DuplicateLayerCommand}" />
         <MenuItem Header="_Delete" Command="{Binding DeleteLayerCommand}" />
         <Separator />
+        <MenuItem Header="New _Group" Command="{Binding NewGroupCommand}" />
+        <MenuItem Header="_Group Layer" Command="{Binding GroupLayerCommand}" InputGesture="Ctrl+G"
+                  ToolTip.Tip="Put the active layer or group into a new group" />
+        <MenuItem Header="U_ngroup" Command="{Binding UngroupCommand}" InputGesture="Ctrl+Shift+G" />
+        <Separator />
         <MenuItem Header="Move _Up" Command="{Binding MoveLayerUpCommand}" />
         <MenuItem Header="Move Do_wn" Command="{Binding MoveLayerDownCommand}" />
+        <Separator />
+        <MenuItem Header="Add Layer _Mask" Command="{Binding AddLayerMaskCommand}"
+                  ToolTip.Tip="Shows everything, or only the selection when there is one" />
+        <MenuItem Header="Apply Layer Mas_k" Command="{Binding ApplyLayerMaskCommand}"
+                  ToolTip.Tip="Bake the mask into the layer's transparency" />
+        <MenuItem Header="Delete Layer Mask" Command="{Binding DeleteLayerMaskCommand}" />
+      </MenuItem>
+      <MenuItem Header="Fil_ter">
+        <MenuItem Header="_Brightness/Contrast..." Command="{Binding AddBrightnessContrastCommand}"
+                  ToolTip.Tip="Adds a filter to the active layer or group — non-destructive, editable later" />
+        <MenuItem Header="_Hue/Saturation..." Command="{Binding AddHueSaturationCommand}"
+                  ToolTip.Tip="Hue, saturation and value (HSV) — non-destructive, editable later" />
+        <MenuItem Header="_Color Balance..." Command="{Binding AddColorBalanceCommand}"
+                  ToolTip.Tip="Cyan–red, magenta–green, yellow–blue per tonal range — non-destructive" />
       </MenuItem>
       <MenuItem Header="_Help">
         <MenuItem Header="_About MiniPaint..." Command="{Binding AboutCommand}" />
@@ -116,6 +138,12 @@
                   HorizontalAlignment="Stretch" Height="44" Padding="6">
             <Image Source="/Assets/Icons/rect-select.png" Width="28" Height="28" Stretch="Uniform" />
           </Button>
+          <Button ToolTip.Tip="Polygonal Lasso (L) — click corners · click the first corner, double-click or Enter to close · Backspace undoes a corner · Esc cancels · Shift snaps to 45° · Shift / Alt at the first click add / subtract"
+                  Command="{Binding SetToolPolygonLassoCommand}"
+                  Background="{Binding CurrentTool, Converter={x:Static ctrl:ToolHighlightConverter.Instance}, ConverterParameter=PolygonLasso}"
+                  HorizontalAlignment="Stretch" Height="44" Padding="6">
+            <Image Source="/Assets/Icons/polygon-lasso.png" Width="28" Height="28" Stretch="Uniform" />
+          </Button>
           <Button ToolTip.Tip="Magic Wand (W) — click a color · Shift add · Alt subtract · Shift+Alt intersect"
                   Command="{Binding SetToolMagicWandCommand}"
                   Background="{Binding CurrentTool, Converter={x:Static ctrl:ToolHighlightConverter.Instance}, ConverterParameter=MagicWand}"
@@ -141,6 +169,12 @@
                   Background="{Binding CurrentTool, Converter={x:Static ctrl:ToolHighlightConverter.Instance}, ConverterParameter=MoveLayer}"
                   HorizontalAlignment="Stretch" Height="44" Padding="6">
             <Image Source="/Assets/Icons/move.png" Width="28" Height="28" Stretch="Uniform" />
+          </Button>
+          <Button ToolTip.Tip="Mask Brush (B) — paints the active layer's mask: black hides, white reveals (X swaps) · [ ] size"
+                  Command="{Binding SetToolMaskBrushCommand}"
+                  Background="{Binding CurrentTool, Converter={x:Static ctrl:ToolHighlightConverter.Instance}, ConverterParameter=MaskBrush}"
+                  HorizontalAlignment="Stretch" Height="44" Padding="6">
+            <Image Source="/Assets/Icons/mask-brush.png" Width="28" Height="28" Stretch="Uniform" />
           </Button>
           <Button ToolTip.Tip="Pan (H / Space+drag)"
                   Command="{Binding SetToolPanCommand}"
@@ -241,6 +275,15 @@
             </StackPanel>
 
             <StackPanel Orientation="Horizontal" Spacing="10" Margin="16,0,0,0"
+                        IsVisible="{Binding IsPolygonLassoTool}">
+              <CheckBox Content="Anti-alias" VerticalAlignment="Center"
+                        ToolTip.Tip="Smooth edges (photos). Leave off for pixel art."
+                        IsChecked="{Binding LassoAntiAlias}" />
+              <TextBlock Text="Click corners · close: first corner, double-click or Enter · Esc cancels"
+                         VerticalAlignment="Center" FontSize="11" Foreground="#AAA" />
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" Spacing="10" Margin="16,0,0,0"
                         IsVisible="{Binding IsObjectSelectTool}">
               <CheckBox Content="Soft edges" VerticalAlignment="Center"
                         ToolTip.Tip="Anti-aliased object edges (photos). Off gives hard pixel edges."
@@ -250,12 +293,43 @@
             </StackPanel>
           </StackPanel>
         </Border>
+        <Border DockPanel.Dock="Top" Background="#2D2D30" Padding="8,4"
+                IsVisible="{Binding IsMaskBrushTool}">
+          <StackPanel Orientation="Horizontal" Spacing="6">
+            <TextBlock Text="Mask" VerticalAlignment="Center" FontSize="11" Foreground="#AAA" />
+            <RadioButton GroupName="MaskBrushPaint" Content="Hide (black)" VerticalAlignment="Center"
+                         ToolTip.Tip="Paint black: hides the layer there (X swaps)"
+                         IsChecked="{Binding IsMaskBrushHide}" />
+            <RadioButton GroupName="MaskBrushPaint" Content="Reveal (white)" VerticalAlignment="Center"
+                         ToolTip.Tip="Paint white: shows the layer again (X swaps)"
+                         IsChecked="{Binding IsMaskBrushReveal}" />
+            <TextBlock Text="Size" VerticalAlignment="Center" FontSize="11" Foreground="#AAA" Margin="12,0,0,0" />
+            <NumericUpDown Width="110" Minimum="1" Maximum="2000" Increment="1" FormatString="0"
+                           ToolTip.Tip="Diameter in pixels ( [ and ] change it)"
+                           Value="{Binding MaskBrushSizeValue}" />
+            <TextBlock Text="Soft" VerticalAlignment="Center" FontSize="11" Foreground="#AAA" Margin="12,0,0,0" />
+            <Slider Width="110" Minimum="0" Maximum="100" VerticalAlignment="Center"
+                    ToolTip.Tip="Hardness: soft edge (0%) to hard edge (100%) — Shift+[ and Shift+] change it"
+                    Value="{Binding MaskBrushHardness}" />
+            <TextBlock Text="Hard" VerticalAlignment="Center" FontSize="11" Foreground="#AAA" />
+            <TextBlock Text="{Binding MaskBrushHardness, StringFormat={}{0:0}%}" VerticalAlignment="Center"
+                       FontSize="11" Foreground="#CCC" MinWidth="34" />
+            <TextBlock Text="Opacity" VerticalAlignment="Center" FontSize="11" Foreground="#AAA" Margin="12,0,0,0" />
+            <Slider Width="110" Minimum="1" Maximum="100" VerticalAlignment="Center"
+                    ToolTip.Tip="How far one stroke changes the mask; paint again to go further"
+                    Value="{Binding MaskBrushOpacity}" />
+            <TextBlock Text="{Binding MaskBrushOpacity, StringFormat={}{0:0}%}" VerticalAlignment="Center"
+                       FontSize="11" Foreground="#CCC" MinWidth="34" />
+          </StackPanel>
+        </Border>
         <Border Background="#1E1E1E">
           <ctrl:ImageCanvas x:Name="Canvas"
                             Workspace="{Binding ActiveWorkspace}"
                             Tool="{Binding CurrentTool}"
                             SelectionMode="{Binding SelectionMode}"
-                            WandOptions="{Binding WandOptions}" />
+                            WandOptions="{Binding WandOptions}"
+                            LassoAntiAlias="{Binding LassoAntiAlias}"
+                            MaskBrush="{Binding MaskBrushOptions}" />
         </Border>
       </DockPanel>
 
@@ -266,6 +340,9 @@
                      Margin="10,8,10,4" Foreground="#CCC" />
           <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="8,0,8,8" Spacing="4">
             <Button Content="+" ToolTip.Tip="Add" Command="{Binding AddLayerCommand}" Width="28" />
+            <Button ToolTip.Tip="New Group" Command="{Binding NewGroupCommand}" Width="28" Padding="4">
+              <Path Data="M0,2 L5,2 L6.5,3.5 L13,3.5 L13,11 L0,11 Z" Fill="#D7B25A" Stretch="Uniform" Width="14" Height="12" />
+            </Button>
             <Button Content="⧉" ToolTip.Tip="Duplicate" Command="{Binding DuplicateLayerCommand}" Width="28" />
             <Button Content="✕" ToolTip.Tip="Delete" Command="{Binding DeleteLayerCommand}" Width="28" />
             <Button Content="↑" ToolTip.Tip="Up" Command="{Binding MoveLayerUpCommand}" Width="28" />
@@ -273,6 +350,31 @@
           </StackPanel>
 
           <StackPanel DockPanel.Dock="Bottom" Margin="8" Spacing="4">
+            <TextBlock Text="{Binding FiltersHeader}" FontSize="11" Foreground="#AAA"
+                       TextTrimming="CharacterEllipsis" />
+            <TextBlock Text="None — the Filter menu adds one to the active layer or group"
+                       IsVisible="{Binding !HasNodeFilters}" FontSize="11" Foreground="#666"
+                       TextWrapping="Wrap" Margin="0,0,0,4" />
+            <ItemsControl ItemsSource="{Binding NodeFilters}" Margin="0,0,0,6">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:FilterItemViewModel">
+                  <Grid ColumnDefinitions="Auto,*,Auto,Auto" Margin="0,1">
+                    <CheckBox IsChecked="{Binding IsEnabled, Mode=OneWay}" Tag="{Binding}"
+                              Click="OnFilterEnabledClick" ToolTip.Tip="Show or hide this filter" />
+                    <StackPanel Grid.Column="1" Margin="2,0" VerticalAlignment="Center"
+                                ToolTip.Tip="{Binding Summary}">
+                      <TextBlock Text="{Binding Name}" FontSize="12" />
+                      <TextBlock Text="{Binding Summary}" FontSize="10" Foreground="#888"
+                                 TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                    <Button Grid.Column="2" Content="✎" Width="26" Padding="0" Tag="{Binding}"
+                            Click="OnEditFilterClick" ToolTip.Tip="Edit" />
+                    <Button Grid.Column="3" Content="✕" Width="26" Padding="0" Margin="2,0,0,0"
+                            Tag="{Binding}" Click="OnRemoveFilterClick" ToolTip.Tip="Remove" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
             <TextBlock Text="Blend mode" FontSize="11" Foreground="#AAA" />
             <ComboBox HorizontalAlignment="Stretch"
                       ItemsSource="{Binding BlendModes}"
@@ -295,19 +397,43 @@
                 <MenuItem Header="New Image from Layer Content"
                           Command="{Binding CreateImageFromLayerCommand}"
                           CommandParameter="{Binding SelectedLayer}" />
+                <Separator />
+                <MenuItem Header="Add Layer Mask" Command="{Binding AddLayerMaskCommand}" />
+                <MenuItem Header="Apply Layer Mask" Command="{Binding ApplyLayerMaskCommand}" />
+                <MenuItem Header="Delete Layer Mask" Command="{Binding DeleteLayerMaskCommand}" />
               </ContextMenu>
             </ListBox.ContextMenu>
             <ListBox.ItemTemplate>
               <DataTemplate x:DataType="vm:LayerItemViewModel">
-                <Grid ColumnDefinitions="Auto,*,Auto" Margin="2">
-                  <CheckBox IsChecked="{Binding IsVisible}"
+                <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto,Auto,Auto" Margin="2">
+                  <Border Width="{Binding IndentWidth}" />
+                  <Button Grid.Column="1" Content="{Binding ExpanderGlyph}" IsVisible="{Binding IsGroup}"
+                          Width="18" Padding="0" Background="Transparent" BorderThickness="0"
+                          Tag="{Binding}" Click="OnGroupExpanderClick" ToolTip.Tip="Open or close the group" />
+                  <Border Grid.Column="1" Width="18" IsVisible="{Binding !IsGroup}" />
+                  <CheckBox Grid.Column="2" IsChecked="{Binding IsVisible}"
                             Click="OnVisibilityClick"
                             Tag="{Binding}" />
-                  <StackPanel Grid.Column="1" Margin="6,0" Spacing="0">
-                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                  <StackPanel Grid.Column="3" Margin="6,0" Spacing="0">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                      <Path IsVisible="{Binding IsGroup}" VerticalAlignment="Center"
+                            Data="M0,2 L5,2 L6.5,3.5 L13,3.5 L13,11 L0,11 Z" Fill="#D7B25A"
+                            Stretch="Uniform" Width="14" Height="12" />
+                      <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                    </StackPanel>
                     <TextBlock Text="{Binding BlendModeLabel}" Foreground="#777" FontSize="10" />
                   </StackPanel>
-                  <TextBlock Grid.Column="2" Text="{Binding Opacity, StringFormat={}{0:P0}}"
+                  <Border Grid.Column="4" IsVisible="{Binding HasFilters}" Margin="0,0,6,0"
+                          CornerRadius="2" Background="#3A5A80" Padding="3,0" VerticalAlignment="Center"
+                          ToolTip.Tip="Filters — listed under the layers">
+                    <TextBlock Text="fx" FontSize="10" FontStyle="Italic" Foreground="#EEE" />
+                  </Border>
+                  <Border Grid.Column="5" IsVisible="{Binding HasMask}" Margin="0,0,6,0"
+                          Width="18" Height="14" CornerRadius="2" Background="#DDD" VerticalAlignment="Center"
+                          ToolTip.Tip="Layer mask — Mask Brush (B): black hides, white reveals">
+                    <Ellipse Width="8" Height="8" Fill="#222" />
+                  </Border>
+                  <TextBlock Grid.Column="6" Text="{Binding Opacity, StringFormat={}{0:P0}}"
                              Foreground="#888" FontSize="11" VerticalAlignment="Center" />
                 </Grid>
               </DataTemplate>

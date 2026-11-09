@@ -55,6 +55,7 @@ public partial class MainWindow : Window
         };
         Canvas.TransformModeChanged += () => Vm.SyncTransformUi();
         Canvas.ObjectSelectionRequested += (prompt, mode) => _ = Vm.ObjectSelectAsync(prompt, mode);
+        Canvas.MaskStrokeFinished += () => Vm.OnMaskStrokeFinished();
 
         // Start with a blank document so the app is immediately usable.
         if (Vm.Tabs.Count == 0)
@@ -156,6 +157,21 @@ public partial class MainWindow : Window
         }
 
         bool alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+
+        // Mask Brush size / hardness: matched on the typed character, so [ ] work on any keyboard
+        // layout (AltGr+5 / AltGr+° on AZERTY); { } are Shift+[ ] on QWERTY.
+        bool typing = TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement() is TextBox;
+        if (!typing && vm.IsMaskBrushTool && e.KeySymbol is "[" or "]" or "{" or "}")
+        {
+            int direction = e.KeySymbol is "]" or "}" ? 1 : -1;
+            if (e.KeySymbol is "{" or "}" || e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+                vm.StepMaskBrushHardness(direction);
+            else
+                vm.StepMaskBrushSize(direction);
+            e.Handled = true;
+            return;
+        }
+
         if (ctrl && alt && e.Key == Key.T) { vm.SetToolSelectionEditCommand.Execute(null); e.Handled = true; }
         else if (ctrl && alt && e.Key == Key.I) { vm.ImageSizeCommand.Execute(null); e.Handled = true; }
         else if (ctrl && alt && e.Key == Key.C) { vm.CanvasSizeCommand.Execute(null); e.Handled = true; }
@@ -165,6 +181,9 @@ public partial class MainWindow : Window
         { vm.ImageModeCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.KeyModifiers.HasFlag(KeyModifiers.Shift) && e.Key == Key.P)
         { vm.EditPaletteCommand.Execute(null); e.Handled = true; }
+        else if (ctrl && e.KeyModifiers.HasFlag(KeyModifiers.Shift) && e.Key == Key.G)
+        { vm.UngroupCommand.Execute(null); e.Handled = true; }
+        else if (ctrl && e.Key == Key.G) { vm.GroupLayerCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.T) { vm.ToggleFreeTransformCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.C) { vm.CopyCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.X) { vm.CutCommand.Execute(null); e.Handled = true; }
@@ -179,11 +198,16 @@ public partial class MainWindow : Window
         else if (ctrl && e.Key == Key.W) { vm.CloseDocumentCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.D0) { vm.FitToWindowCommand.Execute(null); e.Handled = true; }
         else if (ctrl && e.Key == Key.D1) { vm.Zoom100Command.Execute(null); e.Handled = true; }
+        else if (e.Key == Key.Back && e.KeyModifiers == KeyModifiers.Shift)
+        { vm.ContentAwareFillCommand.Execute(null); e.Handled = true; }
         else if (e.Key == Key.V && !vm.IsTransforming) { vm.SetToolSelectCommand.Execute(null); e.Handled = true; }
         else if (e.Key == Key.M && !vm.IsTransforming) { vm.SetToolMoveCommand.Execute(null); e.Handled = true; }
         else if (e.Key == Key.W && !vm.IsTransforming) { vm.SetToolMagicWandCommand.Execute(null); e.Handled = true; }
+        else if (e.Key == Key.L && !typing && !ctrl && !vm.IsTransforming) { vm.SetToolPolygonLassoCommand.Execute(null); e.Handled = true; }
         else if (e.Key == Key.Q && !vm.IsTransforming) { vm.SetToolObjectSelectCommand.Execute(null); e.Handled = true; }
         else if (e.Key == Key.H && !vm.IsTransforming) { vm.SetToolPanCommand.Execute(null); e.Handled = true; }
+        else if (e.Key == Key.B && !typing && !ctrl && !vm.IsTransforming) { vm.SetToolMaskBrushCommand.Execute(null); e.Handled = true; }
+        else if (e.Key == Key.X && !typing && !ctrl && vm.IsMaskBrushTool) { vm.SwapMaskBrushColorCommand.Execute(null); e.Handled = true; }
     }
 
     private void OnVisibilityClick(object? sender, RoutedEventArgs e)
@@ -236,7 +260,7 @@ public partial class MainWindow : Window
     private void OnOpacityPointerPressed(object? sender, PointerPressedEventArgs e)
     {
         // Capture model opacity (not VM binding) so undo restores the real previous value.
-        var modelOpacity = Vm?.SelectedLayer?.Layer.Opacity ?? 1f;
+        var modelOpacity = Vm?.SelectedLayer?.Node.Opacity ?? 1f;
         BeginOpacityDrag(modelOpacity);
     }
 
@@ -249,9 +273,9 @@ public partial class MainWindow : Window
         // Binding updates when switching layers should not start a phantom drag.
         if (!_opacityDragging)
         {
-            if (Math.Abs(value - layer.Layer.Opacity) < 0.0005f)
+            if (Math.Abs(value - layer.Node.Opacity) < 0.0005f)
                 return;
-            BeginOpacityDrag(layer.Layer.Opacity);
+            BeginOpacityDrag(layer.Node.Opacity);
         }
 
         Vm.PreviewLayerOpacity(layer, value);
@@ -293,11 +317,39 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnGroupExpanderClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Control { Tag: LayerItemViewModel item })
+            Vm?.ToggleGroupExpanded(item);
+        e.Handled = true;
+    }
+
+    private void OnFilterEnabledClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Control { Tag: FilterItemViewModel item })
+            Vm?.ToggleFilter(item);
+        e.Handled = true;
+    }
+
+    private void OnEditFilterClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Control { Tag: FilterItemViewModel item } && Vm is not null)
+            _ = Vm.EditFilterAsync(item);
+        e.Handled = true;
+    }
+
+    private void OnRemoveFilterClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is Control { Tag: FilterItemViewModel item })
+            Vm?.RemoveFilter(item);
+        e.Handled = true;
+    }
+
     private void OnBlendSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (Vm?.SelectedLayer is not { } layer) return;
         if (sender is not ComboBox { SelectedItem: BlendModeOption option }) return;
-        if (layer.Layer.BlendMode == option.Mode) return;
+        if (layer.Node.BlendMode == option.Mode) return;
         Vm.ApplyLayerBlendMode(layer, option.Mode);
     }
 }
